@@ -162,7 +162,13 @@ async def process_due(db: AsyncSession, now: datetime | None = None) -> int:
         .limit(BATCH_SIZE)
         .with_for_update(skip_locked=True)  # safe if more than one API process runs the sender
     ))
+    suppressed = {d.lower() for d in get_settings().email_suppressed_domains}
     for row in rows:
+        if row.to_email.rsplit("@", 1)[-1].lower() in suppressed:
+            row.status, row.last_error = "skipped", "recipient domain is suppressed (demo/test address)"
+            if "code" in row.context:
+                row.context = {**row.context, "code": "[redacted]"}
+            continue
         row.attempts += 1
         try:
             await deliver(row)

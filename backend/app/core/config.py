@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     smtp_from_name: str = "VERIQO"
     smtp_timeout_s: int = 20
     frontend_url: str = "http://localhost:5173"  # for links inside emails
+    # Never send to these domains (the demo accounts' made-up addresses): bounces from
+    # non-existent domains hurt the Gmail account's sending reputation.
+    email_suppressed_domains: list[str] = ["demo.veriqo.dev", "example.com", "example.org"]
 
     # One-time passcodes (team invitations); stored only as HMAC-SHA256 with jwt_secret as the key.
     otp_ttl_minutes: int = 15

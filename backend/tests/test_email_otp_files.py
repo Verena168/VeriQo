@@ -111,7 +111,7 @@ def test_port_465_uses_implicit_ssl(smtp_settings, monkeypatch):
 
 
 def _row(template="test", context=None):
-    return EmailOutbox(id=uuid.uuid4(), to_email="to@example.com", template=template, context=context or {},
+    return EmailOutbox(id=uuid.uuid4(), to_email="student@college.edu", template=template, context=context or {},
                        status="queued", attempts=0, next_attempt_at=datetime.now(timezone.utc))
 
 
@@ -222,3 +222,13 @@ def test_size_limits():
     assert files.validate(files.PITCH_DECK, "deck.pptx", b"PK\x03\x04" + b"0" * 100)
     with pytest.raises(files.FileRejected):
         files.validate(files.PITCH_DECK, "deck.docx", b"PK\x03\x04")  # a ZIP, but not a deck
+
+
+async def test_suppressed_demo_domains_are_skipped(smtp_settings, monkeypatch):
+    async def must_not_send(_row):
+        pytest.fail("email sent to a suppressed domain")
+    monkeypatch.setattr(email, "deliver", must_not_send)
+    row = _row()
+    row.to_email = "meera.iyer@Demo.Veriqo.Dev"
+    await email.process_due(FakeSession([row]))
+    assert row.status == "skipped" and row.attempts == 0
