@@ -1,0 +1,48 @@
+{
+  "name": "veriqo-telemetry",
+  "displayName": "VERIQO Telemetry",
+  "description": "Verifies hackathon coding effort for VERIQO: records typing vs paste activity (never your code).",
+  "version": "0.1.0",
+  "publisher": "veriqo",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/veriqo/veriqo" },
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "main": "./out/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "veriqo.signIn", "title": "VERIQO: Sign in" },
+      { "command": "veriqo.signOut", "title": "VERIQO: Sign out" },
+      { "command": "veriqo.startTracking", "title": "VERIQO: Start tracking" },
+      { "command": "veriqo.stopTracking", "title": "VERIQO: Stop tracking" },
+      { "command": "veriqo.showStatus", "title": "VERIQO: Show status" }
+    ],
+    "keybindings": [
+      { "command": "veriqo.paste", "key": "ctrl+v", "mac": "cmd+v", "when": "editorTextFocus && !editorReadonly && veriqo.tracking" },
+      { "command": "veriqo.paste", "key": "shift+insert", "when": "editorTextFocus && !editorReadonly && veriqo.tracking" }
+    ],
+    "configuration": {
+      "title": "VERIQO",
+      "properties": {
+        "veriqo.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:8000/api/v1",
+          "description": "Base URL of the VERIQO API."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "test": "tsc -p . && node --test \"out/test/*.test.js\"",
+    "package": "tsc -p . && vsce package --skip-license --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "~1.90.0",
+    "@vscode/vsce": "^3.2.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,103 @@
+{
+  "model": "gradient_boosting",
+  "trained_at": "2026-10-11T19:55:32+00:00",
+  "features": [
+    "containment_a",
+    "containment_b",
+    "jaccard",
+    "ast_jaccard",
+    "size_ratio",
+    "log_shared"
+  ],
+  "decision_threshold": 0.7103,
+  "threshold_rule": "lowest threshold with validation false-positive rate <= 0.02",
+  "pairs": {
+    "train": {
+      "n": 2709,
+      "positives": 1688
+    },
+    "val": {
+      "n": 519,
+      "positives": 343
+    },
+    "test": {
+      "n": 529,
+      "positives": 361
+    }
+  },
+  "excluded_by_gate": {
+    "pairs": 622,
+    "positives": 109,
+    "rule": "pairs need >= 2 shared fingerprints and >= 50 tokens per file"
+  },
+  "validation_average_precision": {
+    "logistic_regression": 0.9827,
+    "gradient_boosting": 0.987
+  },
+  "test": {
+    "precision": 0.982,
+    "recall": 0.9058,
+    "f1": 0.9424,
+    "false_positive_rate": 0.0357,
+    "roc_auc": 0.9733,
+    "average_precision": 0.9889
+  },
+  "test_baseline_containment_0_5": {
+    "precision": 0.9907,
+    "recall": 0.59,
+    "f1": 0.7396,
+    "false_positive_rate": 0.0119
+  },
+  "test_by_case": {
+    "heavy_edit": {
+      "label": "clone",
+      "n": 81,
+      "recall": 0.963
+    },
+    "partial_15_25": {
+      "label": "clone",
+      "n": 73,
+      "recall": 0.8082
+    },
+    "partial_25_50": {
+      "label": "clone",
+      "n": 72,
+      "recall": 0.875
+    },
+    "random_pair": {
+      "label": "not_clone",
+      "n": 97,
+      "true_negative_rate": 0.9897
+    },
+    "rename_recomment": {
+      "label": "clone",
+      "n": 84,
+      "recall": 0.9167
+    },
+    "reorder": {
+      "label": "clone",
+      "n": 51,
+      "recall": 0.9804
+    },
+    "same_package": {
+      "label": "not_clone",
+      "n": 71,
+      "true_negative_rate": 0.9296
+    }
+  },
+  "test_by_language": {
+    "js": {
+      "precision": 0.9344,
+      "recall": 0.9194,
+      "f1": 0.9268,
+      "false_positive_rate": 0.3077
+    },
+    "python": {
+      "precision": 0.9926,
+      "recall": 0.903,
+      "f1": 0.9457,
+      "false_positive_rate": 0.0129
+    }
+  },
+  "caveat": "Positives are synthetic transformations of real code; real-world plagiarism is more varied, so these figures are an upper bound until validated on the dry-run hackathon data. Negatives from the same package can genuinely share copied code (CPython reuses code between modules), so part of the measured false-positive rate is label noise rather than model error."
+}
