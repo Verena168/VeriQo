@@ -16,6 +16,7 @@ export default function HackathonForm({ initial, submitLabel, onSubmit }) {
     end_date: toLocalInput(initial?.end_date),
     shortlist_threshold: initial?.shortlist_threshold ?? 60,
     max_team_size: initial?.max_team_size ?? 4,
+    is_score_published: initial?.is_score_published ?? false,
     requirements: initial?.requirements?.map(({ skill, priority, description }) => ({ skill, priority, description })) || [
       { skill: "", priority: 3, description: "" },
     ],
@@ -81,6 +82,18 @@ export default function HackathonForm({ initial, submitLabel, onSubmit }) {
             <Input type="number" min={1} max={10} required value={form.max_team_size} onChange={set("max_team_size")} />
           </Field>
         </div>
+        <label className="flex items-start gap-3 text-sm">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={form.is_score_published}
+            onChange={(e) => setForm({ ...form, is_score_published: e.target.checked })}
+          />
+          <span>
+            <span className="font-medium">Share AI match feedback with applicants after publishing</span>
+            <span className="block text-ink-2">Off by default: applicants only see their outcome, never their score.</span>
+          </span>
+        </label>
       </Card>
 
       <Card className="p-5">

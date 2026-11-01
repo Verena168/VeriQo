@@ -1,8 +1,16 @@
 import re
 import uuid
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from app.models.application import ApplicationStatus
 from app.models.reference import ReferenceKind
@@ -102,6 +110,7 @@ class HackathonIn(BaseModel):
     end_date: datetime
     shortlist_threshold: float = Field(default=60, ge=0, le=100)
     max_team_size: int = Field(default=4, ge=1, le=10)
+    is_score_published: bool = False
     requirements: list[RequirementIn] = Field(default_factory=list, max_length=50)
 
     @model_validator(mode="after")
@@ -121,6 +130,7 @@ class HackathonUpdate(BaseModel):
     end_date: datetime | None = None
     shortlist_threshold: float | None = Field(default=None, ge=0, le=100)
     max_team_size: int | None = Field(default=None, ge=1, le=10)
+    is_score_published: bool | None = None
     requirements: list[RequirementIn] | None = None
 
 
@@ -133,6 +143,8 @@ class HackathonOut(ORM):
     end_date: datetime
     shortlist_threshold: float
     max_team_size: int
+    is_score_published: bool = False
+    results_published_at: datetime | None = None
     organizer_id: uuid.UUID
     created_at: datetime
     requirements: list[RequirementOut] = []
@@ -151,6 +163,7 @@ class ApplicationOut(ORM):
     cv_file_id: str | None = None
     pitch_deck_file_id: str | None = None
     review_note: str | None
+    decision_published_at: datetime | None = None
     applied_at: datetime
 
 
@@ -164,6 +177,31 @@ class ApplicationWithHackathon(ApplicationOut):
 
 class ApplicationUpdate(BaseModel):
     status: ApplicationStatus
+
+
+class ParticipantApplicationOut(BaseModel):
+    """The ONLY application shape participant routes may return. It has no score fields by design;
+    `feedback` is filled only when the organizer opts in and results are published."""
+
+    id: uuid.UUID
+    hackathon_id: uuid.UUID
+    state: Literal["under_review", "shortlisted", "rejected"]
+    status_message: str
+    resume_filename: str | None
+    has_cv: bool
+    has_pitch_deck: bool
+    applied_at: datetime
+    published_at: datetime | None
+    feedback: dict | None = None
+
+
+class ParticipantApplicationWithHackathon(ParticipantApplicationOut):
+    hackathon: "HackathonOut"
+
+
+class PublishResultsIn(BaseModel):
+    notify: bool = True  # email every team member
+    allow_undecided: bool = False  # publish even though some applications still need a decision
 
 
 # ------------------------------------------------------------------ teams

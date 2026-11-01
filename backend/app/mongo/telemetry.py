@@ -8,11 +8,10 @@ batch is rejected as a duplicate instead of being double-counted.
 Privacy: only counts, sizes and timestamps are stored, never the text that was typed or pasted.
 """
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
-
-import re
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pymongo import ASCENDING, IndexModel

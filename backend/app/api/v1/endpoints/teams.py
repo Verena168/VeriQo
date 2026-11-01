@@ -14,6 +14,7 @@ from app.models.application import ApplicationStatus
 from app.schemas import MoveMemberIn, TeamOut, TeamUpdate
 from app.services import intelligence_client as intel
 from app.services.intelligence_client import IntelligenceError
+from app.services.visibility import published_shortlisted
 
 router = APIRouter(tags=["teams"])
 
@@ -108,6 +109,11 @@ async def create_team(hackathon_id: uuid.UUID, body: TeamCreate, db: DB, user: O
 @router.get("/hackathons/{hackathon_id}/my-team", response_model=TeamOut | None)
 async def my_team(hackathon_id: uuid.UUID, db: DB, user: Participant):
     hk = await get_hackathon(db, hackathon_id)
+    # Organizers may form teams before publishing; a team assignment would reveal the decision.
+    if not await db.scalar(select(Application.id).where(
+        Application.hackathon_id == hk.id, Application.user_id == user.id, published_shortlisted
+    )):
+        return None
     team_id = await db.scalar(select(TeamMember.team_id).where(TeamMember.hackathon_id == hk.id, TeamMember.user_id == user.id))
     if team_id is None:
         return None

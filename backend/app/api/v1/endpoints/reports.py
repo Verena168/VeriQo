@@ -12,7 +12,14 @@ from app.models import OriginalityReport, Submission, Team, TeamMember, User
 from app.models.report import ReportStatus
 from app.mongo import telemetry
 from app.mongo.client import get_mongo_db
-from app.schemas import ReportDetail, ReportOut, ReportRow, ReportUpdate, SubmissionOut, UserBrief
+from app.schemas import (
+    ReportDetail,
+    ReportOut,
+    ReportRow,
+    ReportUpdate,
+    SubmissionOut,
+    UserBrief,
+)
 
 router = APIRouter(tags=["reports"])
 

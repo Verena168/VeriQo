@@ -153,6 +153,7 @@ const APP_STATUS = {
   rejected: ["critical", "Not shortlisted"],
   needs_review: ["warning", "Needs review"],
   pending: ["neutral", "Pending"],
+  under_review: ["neutral", "Under review"],
 };
 export function ApplicationBadge({ status }) {
   const [s, label] = APP_STATUS[status] || ["neutral", status];

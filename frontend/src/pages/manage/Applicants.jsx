@@ -1,10 +1,85 @@
-import { ChevronDown, ChevronRight, FileText, Presentation } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Presentation, Send } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { ApplicationBadge, Button, Card, Chip, Empty, ErrorBanner, Meter, Select, Spinner, Table, Td, Th } from "../../components/ui";
 import { api, openFile } from "../../lib/api";
 import { fmtDateTime } from "../../lib/format";
 import { useApi } from "../../lib/useApi";
 import { MatchBreakdown } from "../HackathonDetail";
+
+/** Decisions stay private until published; this bar shows what's pending and publishes it. */
+function PublishBar({ hackathon, applications, onPublished }) {
+  const [confirming, setConfirming] = useState(false);
+  const [notify, setNotify] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+  const unpublished = applications.filter((a) => ["shortlisted", "rejected"].includes(a.status) && !a.decision_published_at);
+  const undecided = applications.filter((a) => ["pending", "needs_review"].includes(a.status));
+  const count = (s) => unpublished.filter((a) => a.status === s).length;
+
+  const publish = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api(`/hackathons/${hackathon.id}/results/publish`, { method: "POST", body: { notify, allow_undecided: true } });
+      setResult(res);
+      setConfirming(false);
+      onPublished();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border-b border-line bg-surface-2/40 px-5 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm">
+          {unpublished.length ? (
+            <span>
+              <b>{unpublished.length}</b> decision{unpublished.length === 1 ? "" : "s"} not yet visible to applicants ({count("shortlisted")} shortlisted,{" "}
+              {count("rejected")} not shortlisted).
+            </span>
+          ) : (
+            <span className="text-ink-2">All decisions are published.</span>
+          )}
+          {undecided.length > 0 && <span className="text-warn"> {undecided.length} still need a decision and will stay “under review”.</span>}
+          <div className="mt-0.5 text-xs text-muted">
+            {hackathon.results_published_at ? `Last published ${fmtDateTime(hackathon.results_published_at)}. ` : "Results have not been published yet. "}
+            Applicants never see AI scores{hackathon.is_score_published ? ", except as feedback after publishing (enabled in Settings)" : ""}.
+          </div>
+        </div>
+        {!confirming && (
+          <Button onClick={() => { setConfirming(true); setResult(null); }} disabled={!unpublished.length}>
+            <Send className="size-4" aria-hidden /> Publish results
+          </Button>
+        )}
+      </div>
+      {confirming && (
+        <div className="mt-3 flex flex-wrap items-center gap-4 rounded-lg border border-line bg-surface p-3 text-sm">
+          <span>
+            Publish {unpublished.length} result{unpublished.length === 1 ? "" : "s"}? Applicants will see their outcome on their dashboard.
+          </span>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} /> Email applicants
+          </label>
+          <div className="ml-auto flex gap-2">
+            <Button variant="ghost" onClick={() => setConfirming(false)}>Cancel</Button>
+            <Button onClick={publish} busy={busy}>Confirm &amp; publish</Button>
+          </div>
+        </div>
+      )}
+      {error && <p className="mt-2 text-sm text-bad">{error}</p>}
+      {result && (
+        <p className="mt-2 text-sm text-good">
+          Published {result.published} result{result.published === 1 ? "" : "s"}
+          {result.emails_queued ? `; ${result.emails_queued} email${result.emails_queued === 1 ? "" : "s"} queued` : ""}.
+        </p>
+      )}
+    </div>
+  );
+}
 
 export default function Applicants({ hackathon, canEdit }) {
   const { data, error, loading, reload } = useApi(`/hackathons/${hackathon.id}/applications`);
@@ -29,7 +104,7 @@ export default function Applicants({ hackathon, canEdit }) {
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
         <div>
           <h2 className="font-semibold">Applicants</h2>
-          <p className="text-sm text-ink-2">Ranked by AI match score against your required skills.</p>
+          <p className="text-sm text-ink-2">Ranked by AI match score. The status is the AI's suggestion until you change it; applicants see nothing until you publish.</p>
         </div>
         <div className="w-48">
           <Select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter by status">
@@ -40,6 +115,7 @@ export default function Applicants({ hackathon, canEdit }) {
           </Select>
         </div>
       </div>
+      {canEdit && data.length > 0 && <PublishBar hackathon={hackathon} applications={data} onPublished={reload} />}
       <div className="px-5 pt-4">
         <ErrorBanner>{error || actionError}</ErrorBanner>
       </div>
@@ -84,6 +160,11 @@ export default function Applicants({ hackathon, canEdit }) {
                     </Td>
                     <Td>
                       <ApplicationBadge status={a.status} />
+                      {!a.decision_published_at && ["shortlisted", "rejected"].includes(a.status) && (
+                        <div className="mt-1 text-xs text-muted" title="Applicants still see 'under review' until you publish results">
+                          Not published yet
+                        </div>
+                      )}
                     </Td>
                     <Td>
                       <div className="flex max-w-xs flex-wrap gap-1">

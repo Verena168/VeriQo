@@ -2,7 +2,7 @@
 
 import uuid
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -12,13 +12,13 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import DB, CurrentUser, Participant, Staff
 from app.api.v1.endpoints.hackathons import get_owned_hackathon
 from app.core.config import get_settings
-from app.models import Application, Hackathon, Submission, Team, TeamMember
-from app.models.application import ApplicationStatus
+from app.models import Application, Submission, Team, TeamMember
 from app.models.report import ReportStatus
 from app.mongo import telemetry
 from app.mongo.client import get_mongo_db
 from app.services import intelligence_client as intel
 from app.services.intelligence_client import IntelligenceError
+from app.services.visibility import participant_state
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 EXT_LANGUAGE = {
@@ -47,17 +47,19 @@ async def year_in_code(db: DB, user: Participant, year: int | None = Query(defau
     apps = [a for a in apps if start <= a.applied_at < end]  # hackathons taken part in this year
     hackathons = []
     for a in apps:
+        # A team assignment before results are published would reveal the decision.
         team = await db.scalar(
             select(Team).join(TeamMember, TeamMember.team_id == Team.id)
             .where(TeamMember.user_id == user.id, TeamMember.hackathon_id == a.hackathon_id)
-        )
+        ) if participant_state(a) == "shortlisted" else None
         q = select(Submission).where(Submission.hackathon_id == a.hackathon_id).options(selectinload(Submission.report))
         q = q.where(Submission.team_id == team.id) if team else q.where(Submission.team_id.is_(None), Submission.user_id == user.id)
         sub = await db.scalar(q)
         rep = sub.report if sub and sub.report and sub.report.status in (ReportStatus.COMPLETE, ReportStatus.REVIEWED) else None
         hackathons.append({
             "hackathon_id": str(a.hackathon_id), "event_name": a.hackathon.event_name, "start_date": a.hackathon.start_date,
-            "application_status": a.status.value, "match_score": a.score, "team_name": team.team_name if team else None,
+            # Participant view: published state only, never the AI score.
+            "application_status": participant_state(a), "team_name": team.team_name if team else None,
             "project_title": sub.project_title if sub else None,
             "risk_level": rep.risk_level.value if rep and rep.risk_level else None,
             # "Verified" = the integrity scan found no concerns, so the stats can be trusted on a portfolio.
@@ -91,7 +93,7 @@ async def year_in_code(db: DB, user: Participant, year: int | None = Query(defau
             "pasted_or_inserted_chars": pasted,
             "typed_share": round(typed / (typed + pasted), 3) if typed + pasted else None,
             "hackathons": len(apps),
-            "shortlisted": sum(a.status == ApplicationStatus.SHORTLISTED for a in apps),
+            "shortlisted": sum(participant_state(a) == "shortlisted" for a in apps),
             "submissions": sum(h["project_title"] is not None for h in hackathons),
             "verified_projects": sum(h["verified"] for h in hackathons),
         },

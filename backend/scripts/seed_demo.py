@@ -163,6 +163,12 @@ def main() -> None:
     for t in teams:
         print(f"   {t['team_name']}: {', '.join(m['user']['name'] + ' (' + (m['role'] or '-') + ')' for m in t['members'])} · coverage {t['coverage']}%")
 
+    # Decisions stay hidden (and shortlist-only features locked) until results are published.
+    # No emails: the demo addresses are not real inboxes.
+    pub = api.call("POST", f"/hackathons/{hid}/results/publish", org_token, json={"notify": False, "allow_undecided": True})
+    print(f"   results published: {pub['shortlisted']} shortlisted, {pub['rejected']} not shortlisted, "
+          f"{pub['still_under_review']} left under review")
+
     print("5. Simulated IDE telemetry")
     for i, t in enumerate(teams):
         profile = REPOS[i % len(REPOS)][2]

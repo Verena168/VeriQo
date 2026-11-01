@@ -1,4 +1,4 @@
-import { CalendarDays, ExternalLink, FileUp, Plug, Users } from "lucide-react";
+import { CalendarDays, ExternalLink, FileUp, Plug, Users, Clock, Info, PartyPopper } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -10,7 +10,6 @@ import {
   ErrorBanner,
   Field,
   Input,
-  Meter,
   Notice,
   PageHeader,
   RiskBadge,
@@ -86,21 +85,23 @@ function ApplySection({ hackathon, application, onDone }) {
     <Card>
       <CardHeader
         title="Your application"
-        subtitle={application ? `Submitted ${fmtDateTime(application.applied_at)} · ${application.resume_filename}` : "Upload your resume to be scored against this event's requirements."}
-        action={application && <ApplicationBadge status={application.status} />}
+        subtitle={application ? `Submitted ${fmtDateTime(application.applied_at)} · ${application.resume_filename}` : "Upload your resume and GitHub profile to register for this event."}
+        action={application && <ApplicationBadge status={application.state} />}
       />
       <div className="space-y-5 p-5">
         {application && (
           <>
-            <div className="flex flex-wrap items-center gap-6">
+            {/* The AI match score is never shown to participants; only the published outcome. */}
+            <Notice icon={application.state === "under_review" ? Clock : application.state === "shortlisted" ? PartyPopper : Info}>
+              {application.status_message}
+              {application.published_at && <span className="text-muted"> · Results published {fmtDateTime(application.published_at)}</span>}
+            </Notice>
+            {application.feedback && (
               <div>
-                <div className="text-sm text-ink-2">Match score</div>
-                <div className="text-3xl font-semibold tracking-tight">{application.score === null ? "—" : Math.round(application.score)}</div>
+                <h3 className="mb-2 text-sm font-medium">Feedback shared by the organizer</h3>
+                <MatchBreakdown breakdown={application.feedback.breakdown} />
               </div>
-              <div className="text-sm text-ink-2">Shortlist threshold: {hackathon.shortlist_threshold}</div>
-            </div>
-            {application.review_note && <Notice>{application.review_note}. An organizer will review your application manually.</Notice>}
-            <MatchBreakdown breakdown={application.match_details} />
+            )}
           </>
         )}
         {!ended && (
@@ -297,7 +298,7 @@ export default function HackathonDetail() {
   if (loading) return <Spinner />;
   if (error) return <ErrorBanner>{error}</ErrorBanner>;
   const application = apps.data?.find((a) => a.hackathon_id === id);
-  const shortlisted = application?.status === "shortlisted";
+  const shortlisted = application?.state === "shortlisted"; // published decisions only
 
   return (
     <>
@@ -339,14 +340,6 @@ export default function HackathonDetail() {
               {!h.requirements.length && <li className="px-5 py-3 text-sm text-muted">Open to all skills</li>}
             </ul>
           </Card>
-          {application && (
-            <Card className="p-5">
-              <div className="text-sm text-ink-2">Your match</div>
-              <div className="mt-2">
-                <Meter value={application.score} />
-              </div>
-            </Card>
-          )}
         </aside>
       </div>
     </>

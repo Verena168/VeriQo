@@ -13,7 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import SessionLocal
-from app.models import Hackathon, OriginalityReport, ReferenceRepo, Submission, TeamMember, User
+from app.models import (
+    Hackathon,
+    OriginalityReport,
+    ReferenceRepo,
+    Submission,
+    TeamMember,
+    User,
+)
 from app.models.report import ReportStatus
 from app.models.submission import SubmissionStatus
 from app.mongo import code_store, telemetry

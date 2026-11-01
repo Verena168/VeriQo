@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, SmallInteger, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, SmallInteger, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -22,6 +22,10 @@ class Hackathon(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Applicants scoring at least this (0-100) are shortlisted automatically.
     shortlist_threshold: Mapped[float] = mapped_column(Float, default=60.0, server_default="60")
     max_team_size: Mapped[int] = mapped_column(SmallInteger, default=4, server_default="4")
+    # Set when the organizer publishes shortlisting results (re-publishing updates it).
+    results_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Off by default: AI scores stay hidden from participants even after results are published.
+    is_score_published: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     requirements = relationship(
         "HackathonRequirement", back_populates="hackathon", cascade="all, delete-orphan"

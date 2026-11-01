@@ -9,22 +9,36 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DB, CurrentUser, Organizer, Participant, Staff
-from app.api.v1.endpoints.hackathons import get_hackathon, get_owned_hackathon, phase, to_out
+from app.api.v1.endpoints.hackathons import (
+    get_hackathon,
+    get_owned_hackathon,
+    phase,
+    to_out,
+)
 from app.models import Application, TeamMember
 from app.models.application import ApplicationStatus
 from app.models.user import UserRole
 from app.mongo import files
-from app.schemas import GITHUB_PROFILE_RE, ApplicationOut, ApplicationUpdate, ApplicationWithHackathon, ApplicationWithUser
+from app.schemas import (
+    GITHUB_PROFILE_RE,
+    ApplicationUpdate,
+    ApplicationWithUser,
+    ParticipantApplicationOut,
+    ParticipantApplicationWithHackathon,
+    PublishResultsIn,
+)
 from app.services import email
 from app.services import intelligence_client as intel
 from app.services.intelligence_client import IntelligenceError
+from app.services.visibility import participant_view
 
 router = APIRouter(tags=["applications"])
 MAX_RESUME_BYTES = 5 * 1024 * 1024
 
 
-def _with_hackathon(app: Application, hk) -> ApplicationWithHackathon:
-    return ApplicationWithHackathon(**ApplicationOut.model_validate(app).model_dump(), hackathon=to_out(hk))
+def _with_hackathon(app: Application, hk) -> ParticipantApplicationWithHackathon:
+    # Participant-safe view only: no score, and the decision stays hidden until published.
+    return ParticipantApplicationWithHackathon(**participant_view(app, hk).model_dump(), hackathon=to_out(hk))
 
 
 def _merge_skills(*lists: list[dict]) -> list[dict]:
@@ -38,7 +52,7 @@ def _merge_skills(*lists: list[dict]) -> list[dict]:
     return sorted(merged.values(), key=lambda s: -s["mentions"])
 
 
-@router.post("/hackathons/{hackathon_id}/applications", response_model=ApplicationWithHackathon, status_code=status.HTTP_201_CREATED)
+@router.post("/hackathons/{hackathon_id}/applications", response_model=ParticipantApplicationWithHackathon, status_code=status.HTTP_201_CREATED)
 async def apply(
     hackathon_id: uuid.UUID,
     db: DB,
@@ -115,6 +129,7 @@ async def apply(
     app.status, app.score, app.match_details = new_status, score, breakdown
     app.resume_filename = stored.filename[:255]
     app.cv_file_id = stored.file_id
+    app.decision_published_at = None  # new AI suggestion: a draft until the organizer publishes
     app.review_note = review_note[:500] if review_note else None
     app.applied_at = datetime.now(timezone.utc)
     email.enqueue(db, user.email, "application_received", {"name": user.name, "hackathon": hk.event_name}, to_user_id=user.id)
@@ -163,7 +178,7 @@ async def download_cv(application_id: uuid.UUID, db: DB, user: CurrentUser):
     return await _stream(app.cv_file_id, "CV")
 
 
-@router.put("/applications/{application_id}/pitch-deck", response_model=ApplicationOut)
+@router.put("/applications/{application_id}/pitch-deck", response_model=ParticipantApplicationOut)
 async def upload_pitch_deck(application_id: uuid.UUID, db: DB, user: Participant, deck: UploadFile = File(...)):
     app = await _application_for_file(db, application_id, user)
     hk = await get_hackathon(db, app.hackathon_id)
@@ -183,7 +198,7 @@ async def upload_pitch_deck(application_id: uuid.UUID, db: DB, user: Participant
         raise
     await files.delete(replaced_file_id)
     await db.refresh(app)
-    return app
+    return participant_view(app, hk)
 
 
 @router.get("/applications/{application_id}/pitch-deck")
@@ -192,7 +207,7 @@ async def download_pitch_deck(application_id: uuid.UUID, db: DB, user: CurrentUs
     return await _stream(app.pitch_deck_file_id, "pitch deck")
 
 
-@router.get("/applications/mine", response_model=list[ApplicationWithHackathon])
+@router.get("/applications/mine", response_model=list[ParticipantApplicationWithHackathon])
 async def my_applications(db: DB, user: Participant):
     rows = list(await db.scalars(
         select(Application).where(Application.user_id == user.id).order_by(Application.applied_at.desc())
@@ -221,7 +236,51 @@ async def override_status(application_id: uuid.UUID, body: ApplicationUpdate, db
         select(TeamMember.team_id).where(TeamMember.hackathon_id == app.hackathon_id, TeamMember.user_id == app.user_id)
     ):
         raise HTTPException(status.HTTP_409_CONFLICT, "Remove this participant from their team first")
-    app.status = body.status
+    if body.status != app.status:
+        app.status = body.status
+        # A changed decision is unpublished again; the next "Publish results" notifies this applicant.
+        app.decision_published_at = None
     await db.commit()
     await db.refresh(app)
     return app
+
+
+RESULT_TEMPLATES = {ApplicationStatus.SHORTLISTED: "result_shortlisted", ApplicationStatus.REJECTED: "result_rejected"}
+
+
+@router.post("/hackathons/{hackathon_id}/results/publish")
+async def publish_results(hackathon_id: uuid.UUID, body: PublishResultsIn, db: DB, user: Organizer):
+    """Reveal decided results to applicants and (optionally) email them.
+
+    Idempotent: only decisions not yet published are included, so publishing again after a
+    late change notifies just the affected applicants. Status changes and queued emails are
+    committed together, so nobody's status can change without their email being queued.
+    """
+    hk = await get_owned_hackathon(db, hackathon_id, user)
+    apps = list(await db.scalars(
+        select(Application).where(Application.hackathon_id == hk.id).options(selectinload(Application.user))
+    ))
+    undecided = [a for a in apps if a.status in (ApplicationStatus.PENDING, ApplicationStatus.NEEDS_REVIEW)]
+    if undecided and not body.allow_undecided:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{len(undecided)} application(s) still need a decision (pending or needs review). "
+            "Decide them first, or publish anyway to leave them under review.",
+        )
+    to_publish = [a for a in apps if a.status in RESULT_TEMPLATES and a.decision_published_at is None]
+    now = datetime.now(timezone.utc)
+    for a in to_publish:
+        a.decision_published_at = now
+        if body.notify:
+            email.enqueue(db, a.user.email, RESULT_TEMPLATES[a.status],
+                          {"name": a.user.name, "hackathon": hk.event_name}, to_user_id=a.user_id)
+    if to_publish:
+        hk.results_published_at = now
+    await db.commit()
+    return {
+        "published": len(to_publish),
+        "shortlisted": sum(a.status == ApplicationStatus.SHORTLISTED for a in to_publish),
+        "rejected": sum(a.status == ApplicationStatus.REJECTED for a in to_publish),
+        "still_under_review": len(undecided),
+        "emails_queued": len(to_publish) if body.notify else 0,
+    }

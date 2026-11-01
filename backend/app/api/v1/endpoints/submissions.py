@@ -8,12 +8,12 @@ from sqlalchemy import select
 from app.api.deps import DB, Organizer, Participant, Staff
 from app.api.v1.endpoints.hackathons import get_hackathon, get_owned_hackathon, phase
 from app.models import Application, ReferenceRepo, Submission, TeamMember
-from app.models.application import ApplicationStatus
 from app.models.submission import SubmissionStatus
 from app.mongo import code_store
 from app.mongo.client import get_mongo_db
 from app.schemas import ReferenceIn, ReferenceOut, SubmissionIn, SubmissionOut
 from app.services import scan
+from app.services.visibility import published_shortlisted
 
 router = APIRouter(tags=["submissions"])
 
@@ -25,7 +25,7 @@ async def submit_project(hackathon_id: uuid.UUID, body: SubmissionIn, db: DB, us
     if phase(hk) != "live":
         raise HTTPException(status.HTTP_409_CONFLICT, "Submissions are only accepted while the hackathon is live")
     if not await db.scalar(select(Application.id).where(
-        Application.hackathon_id == hk.id, Application.user_id == user.id, Application.status == ApplicationStatus.SHORTLISTED
+        Application.hackathon_id == hk.id, Application.user_id == user.id, published_shortlisted
     )):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only shortlisted participants can submit")
     team_id = await db.scalar(select(TeamMember.team_id).where(TeamMember.hackathon_id == hk.id, TeamMember.user_id == user.id))

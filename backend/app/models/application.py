@@ -36,6 +36,9 @@ class Application(UUIDPrimaryKeyMixin, Base):
     cv_file_id: Mapped[str | None] = mapped_column(String(24))
     pitch_deck_file_id: Mapped[str | None] = mapped_column(String(24))
     review_note: Mapped[str | None] = mapped_column(String(500))  # e.g. why the resume was unreadable
+    # The decision (status) is a draft until the organizer publishes results. Until then the
+    # participant only ever sees "under review"; see services/visibility.py.
+    decision_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     applied_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
