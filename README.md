@@ -54,9 +54,11 @@ Health: `GET http://localhost:8000/health` reports Postgres and Mongo; interacti
 cd backend; .venv\Scripts\python scripts\seed_demo.py
 ```
 
-Creates an organizer, a judge and 7 participants (password `veriqo-demo-2026`; e.g. `organizer@demo.veriqo.dev`),
-a hackathon, applications, AI-formed teams, **simulated** telemetry, three submissions of real public GitHub repos
-(one deliberately identical to the reference repo) and runs the integrity scan.
+Creates an organizer, a judge and 7 participants (password `veriqo-demo-2026`; e.g. `organizer@demo.veriqo.dev`) and a
+team hackathon, then runs the whole Stage 1 flow through the API: Team Leads invite members who confirm by email OTP,
+every member's CV and GitHub profile is analysed, teams are scored on their pooled skills, solo registrants are merged
+into an AI-formed team, results are published, and three teams submit real public GitHub repos (one copied from the
+reference repo) with **simulated** telemetry before the integrity scan runs.
 
 ## Tests
 

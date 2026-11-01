@@ -13,8 +13,8 @@ NOW = datetime.now(timezone.utc)
 
 
 def application(status, published=False, score=72.5):
-    return Application(id=uuid.uuid4(), hackathon_id=uuid.uuid4(), user_id=uuid.uuid4(), status=status, score=score,
-                       match_details=[{"skill": "Python"}], resume_filename="cv.pdf", cv_file_id="a" * 24,
+    return Application(id=uuid.uuid4(), hackathon_id=uuid.uuid4(), team_id=uuid.uuid4(), submitted_by=uuid.uuid4(),
+                       status=status, score=score, match_details=[{"skill": "Python"}],
                        applied_at=NOW, decision_published_at=NOW if published else None)
 
 
@@ -32,7 +32,7 @@ def test_participant_state(status, published, expected):
 
 
 def test_unpublished_view_reveals_nothing():
-    view = participant_view(application(ApplicationStatus.SHORTLISTED), Hackathon(is_score_published=True))
+    view = participant_view(application(ApplicationStatus.SHORTLISTED), Hackathon(is_score_published=True), "Team")
     assert view.state == "under_review" and view.status_message == UNDER_REVIEW_MESSAGE
     assert view.published_at is None and view.feedback is None  # even with score sharing on
     assert not SCORE_FIELDS & set(view.model_dump())
@@ -40,8 +40,8 @@ def test_unpublished_view_reveals_nothing():
 
 def test_score_shared_only_when_opted_in_and_published():
     published = application(ApplicationStatus.REJECTED, published=True)
-    assert participant_view(published, Hackathon(is_score_published=False)).feedback is None
-    shared = participant_view(published, Hackathon(is_score_published=True)).feedback
+    assert participant_view(published, Hackathon(is_score_published=False), "Team").feedback is None
+    shared = participant_view(published, Hackathon(is_score_published=True), "Team").feedback
     assert shared == {"score": 72.5, "breakdown": [{"skill": "Python"}]}
 
 
@@ -68,9 +68,15 @@ def _schema_fields(openapi: dict, schema: dict, seen=None) -> set[str]:
 
 
 PARTICIPANT_ROUTES = [
-    ("post", "/api/v1/hackathons/{hackathon_id}/applications"),
     ("get", "/api/v1/applications/mine"),
     ("put", "/api/v1/applications/{application_id}/pitch-deck"),
+    # Team registration returns the team's application too
+    ("post", "/api/v1/hackathons/{hackathon_id}/registrations"),
+    ("get", "/api/v1/hackathons/{hackathon_id}/registration"),
+    ("post", "/api/v1/registrations/{team_id}/members"),
+    ("put", "/api/v1/registrations/{team_id}/members/{user_id}/artifacts"),
+    ("post", "/api/v1/registrations/{team_id}/submit"),
+    ("post", "/api/v1/team-invitations/{team_id}/verify"),
 ]
 
 

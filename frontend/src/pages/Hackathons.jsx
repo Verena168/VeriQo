@@ -1,6 +1,7 @@
 import { CalendarDays, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button, Card, Chip, Empty, ErrorBanner, PageHeader, Spinner } from "../components/ui";
+import Invitations from "../components/Invitations";
 import { useAuth } from "../lib/auth";
 import { fmtDate } from "../lib/format";
 import { useApi } from "../lib/useApi";
@@ -73,6 +74,11 @@ export default function Hackathons() {
         }
       />
       <ErrorBanner>{error}</ErrorBanner>
+      {!staff && (
+        <div className="mb-6">
+          <Invitations />
+        </div>
+      )}
       {loading ? (
         <Spinner />
       ) : !data?.length ? (

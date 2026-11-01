@@ -17,8 +17,8 @@ UNDER_REVIEW_MESSAGE = (
     "and you will be notified of your shortlisting status soon."
 )
 STATE_MESSAGES = {
-    "shortlisted": "Congratulations! You have been shortlisted.",
-    "rejected": "Thank you for applying. You were not shortlisted this time.",
+    "shortlisted": "Congratulations! Your team has been shortlisted.",
+    "rejected": "Thank you for registering. Your team was not shortlisted this time.",
 }
 
 # Use in queries wherever a participant's access depends on being shortlisted.
@@ -38,7 +38,7 @@ def is_published_shortlisted(app: Application | None) -> bool:
     return app is not None and participant_state(app) == "shortlisted"
 
 
-def participant_view(app: Application, hk: Hackathon) -> ParticipantApplicationOut:
+def participant_view(app: Application, hk: Hackathon, team_name: str) -> ParticipantApplicationOut:
     state = participant_state(app)
     feedback = None
     if hk.is_score_published and state != "under_review":
@@ -46,10 +46,10 @@ def participant_view(app: Application, hk: Hackathon) -> ParticipantApplicationO
     return ParticipantApplicationOut(
         id=app.id,
         hackathon_id=app.hackathon_id,
+        team_id=app.team_id,
+        team_name=team_name,
         state=state,
         status_message=STATE_MESSAGES.get(state, UNDER_REVIEW_MESSAGE),
-        resume_filename=app.resume_filename,
-        has_cv=bool(app.cv_file_id),
         has_pitch_deck=bool(app.pitch_deck_file_id),
         applied_at=app.applied_at,
         published_at=app.decision_published_at if state != "under_review" else None,

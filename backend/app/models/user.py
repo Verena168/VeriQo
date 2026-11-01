@@ -31,6 +31,5 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     is_student: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # self-declared
     institution: Mapped[str | None] = mapped_column(String(200))
 
-    applications = relationship("Application", back_populates="user")
     team_memberships = relationship("TeamMember", back_populates="user")
     submissions = relationship("Submission", back_populates="user")

@@ -18,7 +18,6 @@ from app.models import (
     OriginalityReport,
     ReferenceRepo,
     Submission,
-    TeamMember,
     User,
 )
 from app.models.report import ReportStatus
@@ -27,6 +26,7 @@ from app.mongo import code_store, telemetry
 from app.mongo.client import get_mongo_db
 from app.services import intelligence_client as intel
 from app.services.risk import assess
+from app.services.teams import confirmed_members
 from app.services.telemetry_scoring import suspicion, team_flag
 
 log = logging.getLogger("uvicorn.error")
@@ -52,10 +52,7 @@ async def _analyze_submission(db: AsyncSession, sub: Submission, hk: Hackathon) 
 
 
 async def _members(db: AsyncSession, sub: Submission) -> list[User]:
-    if sub.team_id is None:
-        return [await db.get(User, sub.user_id)]
-    rows = await db.execute(select(User).join(TeamMember, TeamMember.user_id == User.id).where(TeamMember.team_id == sub.team_id))
-    return list(rows.scalars())
+    return await confirmed_members(db, sub.team_id)
 
 
 async def _build_report(db: AsyncSession, sub: Submission, hk: Hackathon) -> OriginalityReport:

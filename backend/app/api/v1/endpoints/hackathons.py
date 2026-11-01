@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DB, CurrentUser, Organizer
-from app.models import Application, Hackathon, HackathonRequirement
+from app.models import Application, Hackathon, HackathonRequirement, TeamMember
 from app.models.user import UserRole
 from app.schemas import (
     HackathonIn,
@@ -17,7 +17,7 @@ from app.schemas import (
     ShortlistConfig,
     event_rule_errors,
 )
-from app.services.visibility import published_shortlisted
+from app.services.teams import member_has_published_shortlist
 
 router = APIRouter(prefix="/hackathons", tags=["hackathons"])
 
@@ -78,9 +78,8 @@ async def my_hackathons(db: DB, user: CurrentUser):
     if user.role == UserRole.ORGANIZER:
         q = q.where(Hackathon.organizer_id == user.id)
     elif user.role == UserRole.PARTICIPANT:
-        q = q.join(Application, Application.hackathon_id == Hackathon.id).where(
-            Application.user_id == user.id, published_shortlisted
-        )
+        # Join on the participant's confirmed team in each hackathon, then require a published shortlist.
+        q = q.where(member_has_published_shortlist(user.id).where(TeamMember.hackathon_id == Hackathon.id))
     return [to_out(h) for h in await db.scalars(q)]
 
 

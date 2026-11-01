@@ -7,21 +7,17 @@ from sqlalchemy import select
 
 from app.api.deps import DB, Participant
 from app.api.v1.endpoints.hackathons import get_hackathon
-from app.models import Application
 from app.mongo import telemetry
 from app.mongo.client import get_mongo_db
+from app.services.teams import member_has_published_shortlist
 from app.services.telemetry_scoring import suspicion
-from app.services.visibility import published_shortlisted
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def ingest(body: telemetry.TelemetryBatchIn, db: DB, user: Participant, response: Response):
-    allowed = await db.scalar(select(Application.id).where(
-        Application.hackathon_id == body.hackathon_id, Application.user_id == user.id,
-        published_shortlisted,
-    ))
+    allowed = await db.scalar(select(member_has_published_shortlist(user.id, body.hackathon_id)))
     if not allowed:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not a shortlisted participant of this hackathon")
     doc = telemetry.TelemetryLogDocument(**body.model_dump(), user_id=user.id)

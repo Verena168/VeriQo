@@ -103,8 +103,8 @@ export default function Applicants({ hackathon, canEdit }) {
     <Card>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
         <div>
-          <h2 className="font-semibold">Applicants</h2>
-          <p className="text-sm text-ink-2">Ranked by AI match score. The status is the AI's suggestion until you change it; applicants see nothing until you publish.</p>
+          <h2 className="font-semibold">Registered teams</h2>
+          <p className="text-sm text-ink-2">Ranked by the AI team score (all members' skills pooled). The status is the AI's suggestion until you change it; teams see nothing until you publish.</p>
         </div>
         <div className="w-48">
           <Select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter by status">
@@ -120,40 +120,39 @@ export default function Applicants({ hackathon, canEdit }) {
         <ErrorBanner>{error || actionError}</ErrorBanner>
       </div>
       {!rows.length ? (
-        <Empty title="No applicants here">Participants apply from the hackathon page by uploading a resume.</Empty>
+        <Empty title="No teams here yet">Teams appear once their lead submits the registration.</Empty>
       ) : (
         <Table>
           <thead>
             <tr>
               <Th className="w-8" />
-              <Th>Applicant</Th>
-              <Th>Score</Th>
+              <Th>Team</Th>
+              <Th>Team score</Th>
               <Th>Status</Th>
-              <Th>Top skills</Th>
-              <Th>Experience</Th>
+              <Th>Combined skills</Th>
               {canEdit && <Th className="text-right">Decision</Th>}
             </tr>
           </thead>
           <tbody>
             {rows.map((a) => {
-              const p = a.user.parsed_skills || {};
               const isOpen = open === a.id;
+              const pooled = [...new Set(a.members.flatMap((m) => m.skills))];
               return (
                 <Fragment key={a.id}>
                   <tr className="hover:bg-surface-2/50">
                     <Td>
-                      <button onClick={() => setOpen(isOpen ? null : a.id)} aria-label="Show score breakdown" className="text-ink-2">
+                      <button onClick={() => setOpen(isOpen ? null : a.id)} aria-label="Show members and score breakdown" className="text-ink-2">
                         {isOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
                       </button>
                     </Td>
                     <Td>
-                      <div className="font-medium">{a.user.name}</div>
-                      <div className="text-xs text-muted">{a.user.email}</div>
-                      {a.user.github_url && (
-                        <a className="text-xs text-accent hover:underline" href={a.user.github_url} target="_blank" rel="noreferrer">
-                          {a.user.github_url.replace("https://github.com/", "@")}
-                        </a>
-                      )}
+                      <div className="font-medium">
+                        {a.team_name} {a.formed_by === "ai" && <Chip tone="accent">AI-formed</Chip>}
+                      </div>
+                      <div className="text-xs text-muted">
+                        {a.members.map((m) => m.user.name + (m.is_lead ? " (lead)" : "")).join(", ")}
+                        {a.seeking_teammates && " · looking for teammates"}
+                      </div>
                     </Td>
                     <Td>
                       <Meter value={a.score} />
@@ -161,23 +160,18 @@ export default function Applicants({ hackathon, canEdit }) {
                     <Td>
                       <ApplicationBadge status={a.status} />
                       {!a.decision_published_at && ["shortlisted", "rejected"].includes(a.status) && (
-                        <div className="mt-1 text-xs text-muted" title="Applicants still see 'under review' until you publish results">
+                        <div className="mt-1 text-xs text-muted" title="Teams still see 'under review' until you publish results">
                           Not published yet
                         </div>
                       )}
                     </Td>
                     <Td>
-                      <div className="flex max-w-xs flex-wrap gap-1">
-                        {(p.skills || []).slice(0, 5).map((s) => (
-                          <Chip key={s.name} title={`${s.mentions} mention(s) · ${s.sources.join(", ")}`}>
-                            {s.name}
-                          </Chip>
+                      <div className="flex max-w-sm flex-wrap gap-1">
+                        {pooled.slice(0, 6).map((s) => (
+                          <Chip key={s}>{s}</Chip>
                         ))}
+                        {pooled.length > 6 && <Chip>+{pooled.length - 6}</Chip>}
                       </div>
-                    </Td>
-                    <Td className="whitespace-nowrap text-ink-2">
-                      {p.experience_level || "—"}
-                      {p.experience_years ? ` · ${p.experience_years} yrs` : ""}
                     </Td>
                     {canEdit && (
                       <Td className="whitespace-nowrap text-right">
@@ -196,25 +190,53 @@ export default function Applicants({ hackathon, canEdit }) {
                   </tr>
                   {isOpen && (
                     <tr>
-                      <td colSpan={canEdit ? 7 : 6} className="border-b border-line bg-surface-2/40 px-5 py-4">
-                        <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-muted">
-                          <span>
-                            Applied {fmtDateTime(a.applied_at)} · {a.resume_filename}
-                            {p.github && ` · GitHub: ${p.github.public_repos} repos, ${p.github.recently_active_repos} active in 6 months`}
-                          </span>
-                          {a.cv_file_id && (
-                            <Button size="sm" variant="secondary" onClick={() => openFile(`/applications/${a.id}/cv`).catch((e) => setActionError(e.message))}>
-                              <FileText className="size-3.5" aria-hidden /> View CV
-                            </Button>
-                          )}
+                      <td colSpan={canEdit ? 6 : 5} className="space-y-4 border-b border-line bg-surface-2/40 px-5 py-4">
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
+                          <span>Registered {fmtDateTime(a.applied_at)}</span>
                           {a.pitch_deck_file_id && (
                             <Button size="sm" variant="secondary" onClick={() => openFile(`/applications/${a.id}/pitch-deck`).catch((e) => setActionError(e.message))}>
                               <Presentation className="size-3.5" aria-hidden /> View pitch deck
                             </Button>
                           )}
                         </div>
-                        {a.review_note && <p className="mb-2 text-sm text-warn">{a.review_note}</p>}
-                        <MatchBreakdown breakdown={a.match_details} />
+                        {a.review_note && <p className="text-sm text-warn">{a.review_note}</p>}
+                        <div className="grid gap-3 md:grid-cols-2">
+                          {a.members.map((m) => (
+                            <div key={m.user.id} className="rounded-lg border border-line bg-surface p-3 text-sm">
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <div className="font-medium">
+                                    {m.user.name} {m.is_lead && <span className="text-xs text-muted">· lead</span>}
+                                  </div>
+                                  <div className="text-xs text-muted">
+                                    {m.user.email}
+                                    {m.experience_level && ` · ${m.experience_level}`}
+                                  </div>
+                                  {m.artifact?.github_url && (
+                                    <a className="text-xs text-accent hover:underline" href={m.artifact.github_url} target="_blank" rel="noreferrer">
+                                      {m.artifact.github_url.replace("https://github.com/", "@")}
+                                    </a>
+                                  )}
+                                </div>
+                                {m.artifact?.has_cv && (
+                                  <Button size="sm" variant="secondary" onClick={() => openFile(`/teams/${a.team_id}/members/${m.user.id}/cv`).catch((e) => setActionError(e.message))}>
+                                    <FileText className="size-3.5" aria-hidden /> CV
+                                  </Button>
+                                )}
+                              </div>
+                              {m.artifact?.parse_status === "unreadable" && <p className="mt-1 text-xs text-warn">CV text couldn't be read; review it manually.</p>}
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {m.skills.slice(0, 10).map((s) => (
+                                  <Chip key={s}>{s}</Chip>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <div>
+                          <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">How the team matched the requirements</h4>
+                          <MatchBreakdown breakdown={a.match_details} />
+                        </div>
                       </td>
                     </tr>
                   )}

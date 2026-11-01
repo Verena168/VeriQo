@@ -339,25 +339,42 @@ class HackathonOut(ORM):
 # ------------------------------------------------------------------ applications
 
 class ApplicationOut(ORM):
+    """Organizer/judge view of a team's application (includes AI scores)."""
+
     id: uuid.UUID
     hackathon_id: uuid.UUID
+    team_id: uuid.UUID
     status: ApplicationStatus
     score: float | None
     match_details: list | None
-    resume_filename: str | None
-    cv_file_id: str | None = None
     pitch_deck_file_id: str | None = None
     review_note: str | None
     decision_published_at: datetime | None = None
     applied_at: datetime
 
 
-class ApplicationWithUser(ApplicationOut):
+class MemberArtifactOut(ORM):
+    cv_filename: str | None
+    has_cv: bool = False
+    github_url: str | None
+    parse_status: str
+    parse_note: str | None
+
+
+class StaffMemberOut(BaseModel):
     user: UserOut
+    is_lead: bool
+    role: str | None = None
+    artifact: MemberArtifactOut | None = None
+    skills: list[str] = []  # from this registration's CV + GitHub analysis
+    experience_level: str | None = None
 
 
-class ApplicationWithHackathon(ApplicationOut):
-    hackathon: HackathonOut
+class ApplicationWithTeam(ApplicationOut):
+    team_name: str
+    formed_by: str
+    seeking_teammates: bool
+    members: list[StaffMemberOut]
 
 
 class ApplicationUpdate(BaseModel):
@@ -370,10 +387,10 @@ class ParticipantApplicationOut(BaseModel):
 
     id: uuid.UUID
     hackathon_id: uuid.UUID
+    team_id: uuid.UUID
+    team_name: str
     state: Literal["under_review", "shortlisted", "rejected"]
     status_message: str
-    resume_filename: str | None
-    has_cv: bool
     has_pitch_deck: bool
     applied_at: datetime
     published_at: datetime | None
@@ -389,12 +406,58 @@ class PublishResultsIn(BaseModel):
     allow_undecided: bool = False  # publish even though some applications still need a decision
 
 
-# ------------------------------------------------------------------ teams
+# ------------------------------------------------------------------ team registration (participants)
+
+class RegistrationCreate(BaseModel):
+    team_name: str | None = Field(default=None, min_length=2, max_length=120)  # defaults to your name when solo
+    seeking_teammates: bool = False
+
+
+class InviteIn(BaseModel):
+    email: EmailStr
+
+
+class OtpVerifyIn(BaseModel):
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class RegistrationMemberOut(BaseModel):
+    user: UserBrief
+    is_lead: bool
+    status: str
+    invited_at: datetime
+    confirmed_at: datetime | None
+    artifact: MemberArtifactOut | None = None
+
+
+class RegistrationOut(BaseModel):
+    team_id: uuid.UUID
+    hackathon_id: uuid.UUID
+    team_name: str
+    status: str  # draft / submitted / ...
+    seeking_teammates: bool
+    is_lead: bool  # whether the caller leads this team
+    members: list[RegistrationMemberOut]
+    checklist: list[str]  # what still blocks submission (empty = ready)
+    application: ParticipantApplicationOut | None = None
+
+
+class InvitationOut(BaseModel):
+    team_id: uuid.UUID
+    team_name: str
+    hackathon_id: uuid.UUID
+    hackathon_name: str
+    lead_name: str
+    invited_at: datetime
+
+
+# ------------------------------------------------------------------ teams (organizer)
 
 class TeamMemberOut(ORM):
     user: UserBrief
     role: str | None
     ai_recommended: bool
+    is_lead: bool = False
 
 
 class TeamOut(ORM):
@@ -402,6 +465,7 @@ class TeamOut(ORM):
     hackathon_id: uuid.UUID
     team_name: str
     description: str | None
+    formed_by: str = "self"
     members: list[TeamMemberOut] = []
     coverage: float | None = None
     missing_skills: list[str] = []
@@ -410,10 +474,6 @@ class TeamOut(ORM):
 class TeamUpdate(BaseModel):
     team_name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=1000)
-
-
-class MoveMemberIn(BaseModel):
-    user_id: uuid.UUID
 
 
 # ------------------------------------------------------------------ submissions / references

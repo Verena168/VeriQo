@@ -1,4 +1,4 @@
-import { CalendarDays, ExternalLink, FileUp, Plug, Users, Clock, Info, PartyPopper } from "lucide-react";
+import { CalendarDays, ExternalLink, Plug, Users, Clock, Info, PartyPopper } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -23,6 +23,7 @@ import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { fmtDateTime, fmtNum, fmtPct, fmtRatio, shortSha } from "../lib/format";
 import { useApi } from "../lib/useApi";
+import Invitations from "../components/Invitations";
 import { PhaseChip } from "./Hackathons";
 
 const MATCHED_BY = { exact: "Exact match", semantic: "Similar skill", category: "Same field", none: "Missing" };
@@ -79,116 +80,92 @@ function eligibilityProblems(user, h) {
   return problems;
 }
 
-function ApplySection({ hackathon, application, onDone }) {
+function RegistrationSection({ hackathon, onChange }) {
   const { user } = useAuth();
-  const [file, setFile] = useState(null);
-  const [github, setGithub] = useState(user.github_url || "");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
+  const { data: reg, loading, reload } = useApi(`/hackathons/${hackathon.id}/registration`);
+  if (loading) return <Spinner label="Loading your registration" />;
   const ended = hackathon.phase === "ended";
-  const problems = eligibilityProblems(user, hackathon); // the server enforces the same rules
+  const problems = eligibilityProblems(user, hackathon);
+  const href = `/hackathons/${hackathon.id}/register`;
 
-  const submit = async (e) => {
-    e.preventDefault();
-    if (!file) return setError("Choose your resume first.");
-    const form = new FormData();
-    form.append("resume", file);
-    if (github.trim()) form.append("github_url", github.trim());
-    setBusy(true);
-    setError(null);
-    try {
-      await api(`/hackathons/${hackathon.id}/applications`, { method: "POST", form });
-      onDone();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
+  if (!reg) {
+    return (
+      <>
+        <Invitations hackathonId={hackathon.id} onChange={() => { reload(); onChange(); }} />
+        <Card>
+          <CardHeader
+            title="Registration"
+            subtitle={hackathon.participation_mode === "solo"
+              ? "Register with your CV and GitHub profile."
+              : `Register as a team of ${hackathon.min_team_size}–${hackathon.max_team_size}. The Team Lead registers and invites the members.`}
+          />
+          <div className="p-5">
+            {ended ? (
+              <Notice>This hackathon has ended.</Notice>
+            ) : problems.length > 0 ? (
+              <Notice icon={Info}>
+                <div className="font-medium">Before you can register:</div>
+                <ul className="mt-1 list-disc pl-5">
+                  {problems.map((p) => (
+                    <li key={p}>{p}</li>
+                  ))}
+                </ul>
+                <Link to="/profile" className="mt-2 inline-block font-medium text-accent hover:underline">
+                  Update your profile
+                </Link>
+              </Notice>
+            ) : (
+              <Link to={href}>
+                <Button>
+                  <Users className="size-4" aria-hidden /> {hackathon.participation_mode === "solo" ? "Register" : "Register your team"}
+                </Button>
+              </Link>
+            )}
+          </div>
+        </Card>
+      </>
+    );
+  }
 
+  const confirmed = reg.members.filter((m) => m.status === "confirmed");
   return (
     <Card>
       <CardHeader
-        title="Your application"
-        subtitle={application ? `Submitted ${fmtDateTime(application.applied_at)} · ${application.resume_filename}` : "Upload your resume and GitHub profile to register for this event."}
-        action={application && <ApplicationBadge status={application.state} />}
+        title={reg.team_name}
+        subtitle={reg.status === "draft" ? "Registration in progress" : `Registered ${fmtDateTime(reg.application?.applied_at)}`}
+        action={reg.application && <ApplicationBadge status={reg.application.state} />}
       />
-      <div className="space-y-5 p-5">
-        {application && (
-          <>
-            {/* The AI match score is never shown to participants; only the published outcome. */}
-            <Notice icon={application.state === "under_review" ? Clock : application.state === "shortlisted" ? PartyPopper : Info}>
-              {application.status_message}
-              {application.published_at && <span className="text-muted"> · Results published {fmtDateTime(application.published_at)}</span>}
-            </Notice>
-            {application.feedback && (
-              <div>
-                <h3 className="mb-2 text-sm font-medium">Feedback shared by the organizer</h3>
-                <MatchBreakdown breakdown={application.feedback.breakdown} />
-              </div>
-            )}
-          </>
-        )}
-        {!ended && problems.length > 0 && (
-          <Notice icon={Info}>
-            <div className="font-medium">Before you can apply:</div>
-            <ul className="mt-1 list-disc pl-5">
-              {problems.map((p) => (
-                <li key={p}>{p}</li>
-              ))}
-            </ul>
-            <Link to="/profile" className="mt-2 inline-block font-medium text-accent hover:underline">
-              Update your profile
-            </Link>
+      <div className="space-y-4 p-5">
+        {reg.application ? (
+          <Notice icon={reg.application.state === "under_review" ? Clock : reg.application.state === "shortlisted" ? PartyPopper : Info}>
+            {reg.application.status_message}
+            {reg.application.published_at && <span className="text-muted"> · Results published {fmtDateTime(reg.application.published_at)}</span>}
           </Notice>
+        ) : (
+          <p className="text-sm text-ink-2">
+            {reg.checklist.length ? `${reg.checklist.length} thing${reg.checklist.length === 1 ? "" : "s"} left before ${reg.is_lead ? "you can" : "your lead can"} submit.` : "Ready to submit."}
+          </p>
         )}
-        {!ended && problems.length === 0 && (
-          <form onSubmit={submit} className="space-y-4 border-t border-line pt-5 first:border-0 first:pt-0">
-            <ErrorBanner>{error}</ErrorBanner>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label={application ? "Re-upload resume" : "Resume"} hint="PDF, DOCX or TXT, up to 5 MB.">
-                <Input type="file" accept=".pdf,.docx,.txt" onChange={(e) => setFile(e.target.files[0] || null)} />
-              </Field>
-              <Field label="GitHub profile" hint="Your public repos add verified skill evidence.">
-                <Input placeholder="https://github.com/username" value={github} onChange={(e) => setGithub(e.target.value)} />
-              </Field>
-            </div>
-            <Button type="submit" busy={busy}>
-              <FileUp className="size-4" aria-hidden /> {application ? "Re-apply" : "Apply"}
-            </Button>
-            {busy && <p className="text-sm text-ink-2">Parsing your resume and analysing your GitHub profile…</p>}
-          </form>
+        {reg.application?.feedback && (
+          <div>
+            <h3 className="mb-2 text-sm font-medium">Feedback shared by the organizer</h3>
+            <MatchBreakdown breakdown={reg.application.feedback.breakdown} />
+          </div>
         )}
-      </div>
-    </Card>
-  );
-}
-
-function TeamSection({ hackathonId }) {
-  const { data: team, loading } = useApi(`/hackathons/${hackathonId}/my-team`);
-  if (loading) return null;
-  return (
-    <Card>
-      <CardHeader title="Your team" subtitle={team ? team.description : "Teams are formed by the organizer once shortlisting closes."} action={<Users className="size-5 text-muted" aria-hidden />} />
-      {team && (
-        <div className="p-5">
-          <div className="mb-3 text-lg font-semibold">{team.team_name}</div>
-          <ul className="divide-y divide-line">
-            {team.members.map((m) => (
-              <li key={m.user.id} className="flex items-center justify-between py-2 text-sm">
-                <span className="font-medium">{m.user.name}</span>
-                <span className="text-ink-2">{m.role || "Generalist"}</span>
-              </li>
-            ))}
-          </ul>
-          {team.coverage !== null && (
-            <div className="mt-4 text-sm text-ink-2">
-              Covers {fmtPct(team.coverage)} of required skills
-              {team.missing_skills.length > 0 && <> · missing {team.missing_skills.join(", ")}</>}
-            </div>
-          )}
+        <div className="flex flex-wrap gap-1.5">
+          {confirmed.map((m) => (
+            <Chip key={m.user.id} tone={m.is_lead ? "accent" : "neutral"}>
+              {m.user.name}
+              {m.is_lead ? " · lead" : ""}
+            </Chip>
+          ))}
         </div>
-      )}
+        <Link to={href}>
+          <Button variant={reg.status === "draft" ? "primary" : "secondary"}>
+            {reg.status === "draft" ? (reg.is_lead ? "Continue registration" : "View team & upload your CV") : "View registration"}
+          </Button>
+        </Link>
+      </div>
     </Card>
   );
 }
@@ -345,8 +322,7 @@ export default function HackathonDetail() {
         <div className="space-y-6">
           {user.role === "participant" && !apps.loading && (
             <>
-              <ApplySection hackathon={h} application={application} onDone={apps.reload} />
-              {shortlisted && <TeamSection hackathonId={id} />}
+              <RegistrationSection hackathon={h} onChange={apps.reload} />
               {shortlisted && <SubmissionSection hackathon={h} />}
               {shortlisted && <TelemetrySection hackathonId={id} />}
               {shortlisted && <OwnReport hackathonId={id} />}

@@ -1,9 +1,13 @@
-"""Participant applications: resume upload, AI shortlisting results (Module A)."""
+"""Team applications: the organizer's review grid, decisions, publishing, and pitch decks (Module A).
+
+Registration itself (creating a team, inviting members, uploading CVs, submitting) lives in
+registrations.py; an application is created when a team lead submits.
+"""
 
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -15,153 +19,34 @@ from app.api.v1.endpoints.hackathons import (
     phase,
     to_out,
 )
-from app.models import Application, TeamMember
+from app.models import Application, Team, TeamMember
 from app.models.application import ApplicationStatus
+from app.models.team import MemberStatus, TeamStatus
 from app.models.user import UserRole
 from app.mongo import files
 from app.schemas import (
-    GITHUB_PROFILE_RE,
+    ApplicationOut,
     ApplicationUpdate,
-    ApplicationWithUser,
+    ApplicationWithTeam,
+    MemberArtifactOut,
     ParticipantApplicationOut,
     ParticipantApplicationWithHackathon,
     PublishResultsIn,
+    StaffMemberOut,
+    UserOut,
 )
 from app.services import email
-from app.services import intelligence_client as intel
-from app.services.eligibility import person_violations, registration_problem
-from app.services.intelligence_client import IntelligenceError
+from app.services.registration import member_skills
+from app.services.teams import confirmed_team_id
 from app.services.visibility import participant_view
 
 router = APIRouter(tags=["applications"])
-MAX_RESUME_BYTES = 5 * 1024 * 1024
 
 
-def _with_hackathon(app: Application, hk) -> ParticipantApplicationWithHackathon:
-    # Participant-safe view only: no score, and the decision stays hidden until published.
-    return ParticipantApplicationWithHackathon(**participant_view(app, hk).model_dump(), hackathon=to_out(hk))
+# ------------------------------------------------------------------ shared helpers
 
-
-def _merge_skills(*lists: list[dict]) -> list[dict]:
-    merged: dict[str, dict] = {}
-    for skills in lists:
-        for s in skills:
-            m = merged.setdefault(s["name"], {"name": s["name"], "category": s["category"], "mentions": 0, "sources": []})
-            m["mentions"] += s.get("mentions", 1)
-            if s.get("source") and s["source"] not in m["sources"]:
-                m["sources"].append(s["source"])
-    return sorted(merged.values(), key=lambda s: -s["mentions"])
-
-
-@router.post("/hackathons/{hackathon_id}/applications", response_model=ParticipantApplicationWithHackathon, status_code=status.HTTP_201_CREATED)
-async def apply(
-    hackathon_id: uuid.UUID,
-    db: DB,
-    user: Participant,
-    resume: UploadFile = File(...),
-    github_url: str | None = Form(default=None),
-):
-    hk = await get_hackathon(db, hackathon_id)
-    if phase(hk) == "ended":
-        raise HTTPException(status.HTTP_409_CONFLICT, "This hackathon has ended")
-    if closed := registration_problem(hk):
-        raise HTTPException(status.HTTP_409_CONFLICT, closed)
-    if problems := person_violations(user, hk):  # hard gate, before any upload or AI work
-        raise HTTPException(status.HTTP_403_FORBIDDEN, " ".join(problems))
-    if await db.scalar(select(TeamMember.team_id).where(TeamMember.hackathon_id == hk.id, TeamMember.user_id == user.id)):
-        raise HTTPException(status.HTTP_409_CONFLICT, "You are already in a team for this hackathon")
-    github_url = (github_url or "").strip() or user.github_url
-    if github_url and not GITHUB_PROFILE_RE.match(github_url):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "GitHub URL must look like https://github.com/<username>")
-
-    data = await resume.read(MAX_RESUME_BYTES + 1)
-    if len(data) > MAX_RESUME_BYTES:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Resume must be 5 MB or smaller")
-    try:
-        files.validate(files.CV, resume.filename or "", data)  # by content, before any AI work
-    except files.FileRejected as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
-
-    review_note, parsed = None, None
-    try:
-        parsed = await intel.parse_resume(resume.filename or "resume", data, resume.content_type)
-    except IntelligenceError as exc:
-        if exc.code != "unreadable_resume":
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
-        review_note = f"Resume could not be parsed: {exc}"
-
-    github = None
-    github_url = github_url or (parsed or {}).get("github_url")
-    if github_url:
-        try:
-            github = await intel.github_profile(github_url)
-            user.github_url = github_url
-        except IntelligenceError as exc:
-            review_note = (review_note + "; " if review_note else "") + f"GitHub: {exc}"
-
-    skills = _merge_skills((parsed or {}).get("skills", []), (github or {}).get("skills", []))
-    user.parsed_skills = {
-        "skills": skills,
-        "experience_years": (parsed or {}).get("experience_years"),
-        "experience_level": (parsed or {}).get("experience_level"),
-        "github": {k: v for k, v in (github or {}).items() if k != "skills"} or None,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    requirements = [{"skill": r.skill, "weight": r.priority} for r in hk.requirements]
-    score, breakdown = None, None
-    if parsed is not None:
-        try:
-            result = await intel.match([s["name"] for s in skills], requirements)
-        except IntelligenceError as exc:
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
-        score, breakdown = result["score"], result["breakdown"]
-
-    if parsed is None:
-        new_status = ApplicationStatus.NEEDS_REVIEW  # whitebook Use Case 1 exception path
-    elif not requirements:
-        new_status = ApplicationStatus.SHORTLISTED
-    else:
-        new_status = ApplicationStatus.SHORTLISTED if score >= hk.shortlist_threshold else ApplicationStatus.REJECTED
-
-    app = await db.scalar(select(Application).where(Application.hackathon_id == hk.id, Application.user_id == user.id))
-    if app is None:
-        app = Application(hackathon_id=hk.id, user_id=user.id)
-        db.add(app)
-    stored = await files.save(files.CV, resume.filename or "resume", data,
-                              {"user_id": str(user.id), "hackathon_id": str(hk.id), "purpose": "application_cv"})
-    replaced_file_id = app.cv_file_id
-    app.status, app.score, app.match_details = new_status, score, breakdown
-    app.resume_filename = stored.filename[:255]
-    app.cv_file_id = stored.file_id
-    app.decision_published_at = None  # new AI suggestion: a draft until the organizer publishes
-    app.review_note = review_note[:500] if review_note else None
-    app.applied_at = datetime.now(timezone.utc)
-    email.enqueue(db, user.email, "application_received", {"name": user.name, "hackathon": hk.event_name}, to_user_id=user.id)
-    try:
-        await db.commit()
-    except Exception:
-        await files.delete(stored.file_id)  # don't leave an orphaned upload behind
-        raise
-    await files.delete(replaced_file_id)  # previous CV, only once the new one is safely recorded
-    await db.refresh(app)
-    return _with_hackathon(app, hk)
-
-
-async def _application_for_file(db, application_id: uuid.UUID, user) -> Application:
-    """The applicant themselves, or staff of the hackathon, may access an application's files."""
-    app = await db.get(Application, application_id)
-    if app is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Application not found")
-    if user.role == UserRole.PARTICIPANT:
-        if app.user_id != user.id:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Application not found")
-    else:
-        await get_owned_hackathon(db, app.hackathon_id, user)
-    return app
-
-
-async def _stream(file_id: str | None, what: str) -> StreamingResponse:
+async def stream_file(file_id: str | None, what: str) -> StreamingResponse:
+    """Stream a GridFS file with safe headers (used for CVs and pitch decks)."""
     if not file_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No {what} uploaded")
     try:
@@ -177,22 +62,77 @@ async def _stream(file_id: str | None, what: str) -> StreamingResponse:
     })
 
 
-@router.get("/applications/{application_id}/cv")
-async def download_cv(application_id: uuid.UUID, db: DB, user: CurrentUser):
-    app = await _application_for_file(db, application_id, user)
-    return await _stream(app.cv_file_id, "CV")
+def _staff_row(app: Application) -> ApplicationWithTeam:
+    team = app.team
+    artifacts = {a.user_id: a for a in team.artifacts}
+    members = sorted((m for m in team.members if m.status == MemberStatus.CONFIRMED), key=lambda m: (not m.is_lead, m.joined_at))
+    out = []
+    for m in members:
+        a = artifacts.get(m.user_id)
+        art = MemberArtifactOut.model_validate(a) if a else None
+        if art:
+            art.has_cv = bool(a.cv_file_id)
+        skills = list(dict.fromkeys(s["name"] for s in member_skills(a)))  # de-duplicated, resume first
+        profile = (a.parsed_profile or {}) if a else {}
+        level = (profile.get("resume") or {}).get("experience_level") or profile.get("experience_level")
+        out.append(StaffMemberOut(user=UserOut.model_validate(m.user), is_lead=m.is_lead, role=m.role, artifact=art,
+                                  skills=skills, experience_level=level))
+    return ApplicationWithTeam(**ApplicationOut.model_validate(app).model_dump(), team_name=team.team_name,
+                               formed_by=team.formed_by, seeking_teammates=team.seeking_teammates, members=out)
+
+
+def _with_team_loaded():
+    return selectinload(Application.team).options(
+        selectinload(Team.members).selectinload(TeamMember.user), selectinload(Team.artifacts)
+    )
+
+
+async def _application_with_access(db, application_id: uuid.UUID, user) -> Application:
+    """Team members (any confirmed member) or the hackathon's staff may access an application."""
+    app = await db.scalar(select(Application).where(Application.id == application_id).options(_with_team_loaded()))
+    if app is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Application not found")
+    if user.role == UserRole.PARTICIPANT:
+        if await confirmed_team_id(db, app.hackathon_id, user.id) != app.team_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Application not found")
+    else:
+        await get_owned_hackathon(db, app.hackathon_id, user)
+    return app
+
+
+# ------------------------------------------------------------------ participants
+
+@router.get("/applications/mine", response_model=list[ParticipantApplicationWithHackathon])
+async def my_applications(db: DB, user: Participant):
+    """Applications of every team the caller is a confirmed member of (participant-safe view)."""
+    rows = (await db.execute(
+        select(Application, Team).join(Team, Team.id == Application.team_id)
+        .join(TeamMember, TeamMember.team_id == Team.id)
+        .where(TeamMember.user_id == user.id, TeamMember.status == MemberStatus.CONFIRMED)
+        .order_by(Application.applied_at.desc())
+    )).all()
+    out = []
+    for app, team in rows:
+        hk = await get_hackathon(db, app.hackathon_id)
+        if team.formed_by == "ai" and app.decision_published_at is None:
+            continue  # an unpublished AI-formed team would reveal the shortlist
+        out.append(ParticipantApplicationWithHackathon(**participant_view(app, hk, team.team_name).model_dump(),
+                                                       hackathon=to_out(hk)))
+    return out
 
 
 @router.put("/applications/{application_id}/pitch-deck", response_model=ParticipantApplicationOut)
 async def upload_pitch_deck(application_id: uuid.UUID, db: DB, user: Participant, deck: UploadFile = File(...)):
-    app = await _application_for_file(db, application_id, user)
+    app = await _application_with_access(db, application_id, user)
+    if app.team.lead_user_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the team lead can upload the pitch deck")
     hk = await get_hackathon(db, app.hackathon_id)
     if phase(hk) == "ended":
         raise HTTPException(status.HTTP_409_CONFLICT, "This hackathon has ended")
     data = await deck.read(files.PITCH_DECK.max_bytes + 1)
     try:
         stored = await files.save(files.PITCH_DECK, deck.filename or "pitch", data,
-                                  {"user_id": str(user.id), "hackathon_id": str(app.hackathon_id), "purpose": "pitch_deck"})
+                                  {"team_id": str(app.team_id), "hackathon_id": str(app.hackathon_id), "purpose": "pitch_deck"})
     except files.FileRejected as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
     replaced_file_id, app.pitch_deck_file_id = app.pitch_deck_file_id, stored.file_id
@@ -202,52 +142,40 @@ async def upload_pitch_deck(application_id: uuid.UUID, db: DB, user: Participant
         await files.delete(stored.file_id)
         raise
     await files.delete(replaced_file_id)
-    await db.refresh(app)
-    return participant_view(app, hk)
+    return participant_view(app, hk, app.team.team_name)
 
 
 @router.get("/applications/{application_id}/pitch-deck")
 async def download_pitch_deck(application_id: uuid.UUID, db: DB, user: CurrentUser):
-    app = await _application_for_file(db, application_id, user)
-    return await _stream(app.pitch_deck_file_id, "pitch deck")
+    app = await _application_with_access(db, application_id, user)
+    return await stream_file(app.pitch_deck_file_id, "pitch deck")
 
 
-@router.get("/applications/mine", response_model=list[ParticipantApplicationWithHackathon])
-async def my_applications(db: DB, user: Participant):
-    rows = list(await db.scalars(
-        select(Application).where(Application.user_id == user.id).order_by(Application.applied_at.desc())
-    ))
-    return [_with_hackathon(a, await get_hackathon(db, a.hackathon_id)) for a in rows]
+# ------------------------------------------------------------------ organizer / judges
 
-
-@router.get("/hackathons/{hackathon_id}/applications", response_model=list[ApplicationWithUser])
+@router.get("/hackathons/{hackathon_id}/applications", response_model=list[ApplicationWithTeam])
 async def list_applications(hackathon_id: uuid.UUID, db: DB, user: Staff):
+    """One row per registered team, ranked by the AI team score."""
     await get_owned_hackathon(db, hackathon_id, user)
     rows = await db.scalars(
-        select(Application).where(Application.hackathon_id == hackathon_id)
-        .options(selectinload(Application.user))
+        select(Application).join(Team, Team.id == Application.team_id)
+        .where(Application.hackathon_id == hackathon_id, Team.status == TeamStatus.SUBMITTED)
+        .options(_with_team_loaded())
         .order_by(Application.score.desc().nulls_last())
     )
-    return list(rows)
+    return [_staff_row(a) for a in rows]
 
 
-@router.patch("/applications/{application_id}", response_model=ApplicationWithUser)
+@router.patch("/applications/{application_id}", response_model=ApplicationWithTeam)
 async def override_status(application_id: uuid.UUID, body: ApplicationUpdate, db: DB, user: Organizer):
-    app = await db.get(Application, application_id, options=[selectinload(Application.user)])
-    if app is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Application not found")
-    await get_owned_hackathon(db, app.hackathon_id, user)
-    if body.status != ApplicationStatus.SHORTLISTED and await db.scalar(
-        select(TeamMember.team_id).where(TeamMember.hackathon_id == app.hackathon_id, TeamMember.user_id == app.user_id)
-    ):
-        raise HTTPException(status.HTTP_409_CONFLICT, "Remove this participant from their team first")
+    app = await _application_with_access(db, application_id, user)
     if body.status != app.status:
         app.status = body.status
-        # A changed decision is unpublished again; the next "Publish results" notifies this applicant.
+        # A changed decision is unpublished again; the next "Publish results" notifies this team.
         app.decision_published_at = None
     await db.commit()
-    await db.refresh(app)
-    return app
+    app = await _application_with_access(db, application_id, user)
+    return _staff_row(app)
 
 
 RESULT_TEMPLATES = {ApplicationStatus.SHORTLISTED: "result_shortlisted", ApplicationStatus.REJECTED: "result_rejected"}
@@ -255,30 +183,35 @@ RESULT_TEMPLATES = {ApplicationStatus.SHORTLISTED: "result_shortlisted", Applica
 
 @router.post("/hackathons/{hackathon_id}/results/publish")
 async def publish_results(hackathon_id: uuid.UUID, body: PublishResultsIn, db: DB, user: Organizer):
-    """Reveal decided results to applicants and (optionally) email them.
+    """Reveal decided results to teams and (optionally) email every confirmed member.
 
     Idempotent: only decisions not yet published are included, so publishing again after a
-    late change notifies just the affected applicants. Status changes and queued emails are
+    late change notifies just the affected teams. Status changes and queued emails are
     committed together, so nobody's status can change without their email being queued.
     """
     hk = await get_owned_hackathon(db, hackathon_id, user)
     apps = list(await db.scalars(
-        select(Application).where(Application.hackathon_id == hk.id).options(selectinload(Application.user))
+        select(Application).join(Team, Team.id == Application.team_id)
+        .where(Application.hackathon_id == hk.id, Team.status == TeamStatus.SUBMITTED).options(_with_team_loaded())
     ))
     undecided = [a for a in apps if a.status in (ApplicationStatus.PENDING, ApplicationStatus.NEEDS_REVIEW)]
     if undecided and not body.allow_undecided:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"{len(undecided)} application(s) still need a decision (pending or needs review). "
+            f"{len(undecided)} team(s) still need a decision (pending or needs review). "
             "Decide them first, or publish anyway to leave them under review.",
         )
     to_publish = [a for a in apps if a.status in RESULT_TEMPLATES and a.decision_published_at is None]
     now = datetime.now(timezone.utc)
+    emails = 0
     for a in to_publish:
         a.decision_published_at = now
         if body.notify:
-            email.enqueue(db, a.user.email, RESULT_TEMPLATES[a.status],
-                          {"name": a.user.name, "hackathon": hk.event_name}, to_user_id=a.user_id)
+            for m in a.team.members:
+                if m.status == MemberStatus.CONFIRMED:
+                    email.enqueue(db, m.user.email, RESULT_TEMPLATES[a.status],
+                                  {"name": m.user.name, "hackathon": hk.event_name}, to_user_id=m.user_id)
+                    emails += 1
     if to_publish:
         hk.results_published_at = now
     await db.commit()
@@ -287,5 +220,5 @@ async def publish_results(hackathon_id: uuid.UUID, body: PublishResultsIn, db: D
         "shortlisted": sum(a.status == ApplicationStatus.SHORTLISTED for a in to_publish),
         "rejected": sum(a.status == ApplicationStatus.REJECTED for a in to_publish),
         "still_under_review": len(undecided),
-        "emails_queued": len(to_publish) if body.notify else 0,
+        "emails_queued": emails,
     }

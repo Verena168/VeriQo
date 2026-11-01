@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import DB, Participant, Staff
 from app.api.v1.endpoints.hackathons import get_hackathon, get_owned_hackathon
-from app.models import OriginalityReport, Submission, Team, TeamMember, User
+from app.models import OriginalityReport, Submission, Team, User
 from app.models.report import ReportStatus
 from app.mongo import telemetry
 from app.mongo.client import get_mongo_db
@@ -20,14 +20,13 @@ from app.schemas import (
     SubmissionOut,
     UserBrief,
 )
+from app.services.teams import confirmed_members, confirmed_team_id
 
 router = APIRouter(tags=["reports"])
 
 
 async def _members(db, sub: Submission) -> list[User]:
-    if sub.team_id is None:
-        return [await db.get(User, sub.user_id)]
-    return list(await db.scalars(select(User).join(TeamMember, TeamMember.user_id == User.id).where(TeamMember.team_id == sub.team_id)))
+    return await confirmed_members(db, sub.team_id)
 
 
 async def _team_name(db, sub: Submission) -> str | None:
@@ -97,10 +96,9 @@ async def member_telemetry(report_id: uuid.UUID, user_id: uuid.UUID, db: DB, use
 @router.get("/hackathons/{hackathon_id}/my-report", response_model=ReportDetail | None)
 async def my_report(hackathon_id: uuid.UUID, db: DB, user: Participant):
     """Participants see their own team's report (whitebook DFD: 'Originality Report (Own Submissions)')."""
-    team_id = await db.scalar(select(TeamMember.team_id).where(TeamMember.hackathon_id == hackathon_id, TeamMember.user_id == user.id))
-    q = select(Submission).where(Submission.hackathon_id == hackathon_id)
-    q = q.where(Submission.team_id == team_id) if team_id else q.where(Submission.team_id.is_(None), Submission.user_id == user.id)
-    sub = await db.scalar(q.options(selectinload(Submission.report)))
+    team_id = await confirmed_team_id(db, hackathon_id, user.id)
+    sub = await db.scalar(select(Submission).where(Submission.hackathon_id == hackathon_id, Submission.team_id == team_id)
+                          .options(selectinload(Submission.report))) if team_id else None
     if sub is None or sub.report is None or sub.report.status not in (ReportStatus.COMPLETE, ReportStatus.REVIEWED):
         return None
     out = ReportDetail.model_validate(sub.report)

@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     applications,
     auth,
     hackathons,
+    registrations,
     reports,
     submissions,
     teams,
@@ -12,5 +13,5 @@ from app.api.v1.endpoints import (
 )
 
 api_router = APIRouter()
-for module in (auth, hackathons, applications, teams, submissions, telemetry, reports, analytics):
+for module in (auth, hackathons, registrations, applications, teams, submissions, telemetry, reports, analytics):
     api_router.include_router(module.router)

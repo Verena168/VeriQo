@@ -14,6 +14,7 @@ from app.api.v1.endpoints.hackathons import get_owned_hackathon
 from app.core.config import get_settings
 from app.models import Application, Submission, Team, TeamMember
 from app.models.report import ReportStatus
+from app.models.team import MemberStatus, TeamStatus
 from app.mongo import telemetry
 from app.mongo.client import get_mongo_db
 from app.services import intelligence_client as intel
@@ -41,25 +42,27 @@ async def year_in_code(db: DB, user: Participant, year: int | None = Query(defau
     for row in act["languages"]:
         langs[EXT_LANGUAGE.get(row["ext"], row["ext"].upper())] += row["chars"]
 
-    apps = list(await db.scalars(
-        select(Application).where(Application.user_id == user.id).options(selectinload(Application.hackathon))
-    ))
-    apps = [a for a in apps if start <= a.applied_at < end]  # hackathons taken part in this year
+    # The applications of the teams the person is a confirmed member of, in this year.
+    rows = (await db.execute(
+        select(Application, Team).join(Team, Team.id == Application.team_id)
+        .join(TeamMember, TeamMember.team_id == Team.id)
+        .where(TeamMember.user_id == user.id, TeamMember.status == MemberStatus.CONFIRMED)
+        .options(selectinload(Application.hackathon))
+    )).all()
+    rows = [(a, t) for a, t in rows if start <= a.applied_at < end]
+    apps = [a for a, _ in rows]
     hackathons = []
-    for a in apps:
-        # A team assignment before results are published would reveal the decision.
-        team = await db.scalar(
-            select(Team).join(TeamMember, TeamMember.team_id == Team.id)
-            .where(TeamMember.user_id == user.id, TeamMember.hackathon_id == a.hackathon_id)
-        ) if participant_state(a) == "shortlisted" else None
-        q = select(Submission).where(Submission.hackathon_id == a.hackathon_id).options(selectinload(Submission.report))
-        q = q.where(Submission.team_id == team.id) if team else q.where(Submission.team_id.is_(None), Submission.user_id == user.id)
-        sub = await db.scalar(q)
+    for a, team in rows:
+        state = participant_state(a)
+        # An AI-formed team assigned before results are published would reveal the decision.
+        show_team = team.formed_by == "self" or state == "shortlisted"
+        sub = await db.scalar(select(Submission).where(Submission.hackathon_id == a.hackathon_id, Submission.team_id == team.id)
+                              .options(selectinload(Submission.report))) if state == "shortlisted" else None
         rep = sub.report if sub and sub.report and sub.report.status in (ReportStatus.COMPLETE, ReportStatus.REVIEWED) else None
         hackathons.append({
             "hackathon_id": str(a.hackathon_id), "event_name": a.hackathon.event_name, "start_date": a.hackathon.start_date,
             # Participant view: published state only, never the AI score.
-            "application_status": participant_state(a), "team_name": team.team_name if team else None,
+            "application_status": state, "team_name": team.team_name if show_team else None,
             "project_title": sub.project_title if sub else None,
             "risk_level": rep.risk_level.value if rep and rep.risk_level else None,
             # "Verified" = the integrity scan found no concerns, so the stats can be trusted on a portfolio.
@@ -110,9 +113,12 @@ async def year_in_code(db: DB, user: Participant, year: int | None = Query(defau
 @router.get("/hackathons/{hackathon_id}")
 async def hackathon_overview(hackathon_id: uuid.UUID, db: DB, user: Staff):
     hk = await get_owned_hackathon(db, hackathon_id, user)
-    apps = list(await db.scalars(select(Application).where(Application.hackathon_id == hk.id)))
+    # Only live registrations: merged (AI) and draft teams are not separate entries.
+    apps = list(await db.scalars(select(Application).join(Team, Team.id == Application.team_id)
+                                 .where(Application.hackathon_id == hk.id, Team.status == TeamStatus.SUBMITTED)))
     subs = list(await db.scalars(select(Submission).where(Submission.hackathon_id == hk.id).options(selectinload(Submission.report))))
-    teams = len(list(await db.scalars(select(Team.id).where(Team.hackathon_id == hk.id))))
+    teams = len(apps)
+    drafts = len(list(await db.scalars(select(Team.id).where(Team.hackathon_id == hk.id, Team.status == TeamStatus.DRAFT))))
     buckets = Counter(min(int(a.score // 10) * 10, 90) for a in apps if a.score is not None)
     risk = Counter(s.report.risk_level.value for s in subs if s.report and s.report.risk_level)
     return {
@@ -120,6 +126,7 @@ async def hackathon_overview(hackathon_id: uuid.UUID, db: DB, user: Staff):
         "by_status": dict(Counter(a.status.value for a in apps)),
         "score_histogram": [{"bucket": f"{b}-{b + 10}", "count": buckets.get(b, 0)} for b in range(0, 100, 10)],
         "teams": teams,
+        "draft_registrations": drafts,
         "submissions": len(subs),
         "scanned": sum(1 for s in subs if s.report and s.report.status in (ReportStatus.COMPLETE, ReportStatus.REVIEWED)),
         "risk": {k: risk.get(k, 0) for k in ("green", "amber", "red")},

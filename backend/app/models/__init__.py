@@ -4,7 +4,7 @@ from app.models.notification import EmailOutbox, OtpCode
 from app.models.reference import ReferenceRepo
 from app.models.report import OriginalityReport
 from app.models.submission import Submission
-from app.models.team import Team, TeamMember
+from app.models.team import Team, TeamMember, TeamMemberArtifact
 from app.models.user import User
 
 __all__ = [
@@ -18,5 +18,6 @@ __all__ = [
     "Submission",
     "Team",
     "TeamMember",
+    "TeamMemberArtifact",
     "User",
 ]

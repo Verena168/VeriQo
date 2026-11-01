@@ -7,3 +7,4 @@ dist/
 out/
 backend/intelligence/training/data/
 .pytest_cache/
+backend/.backups/

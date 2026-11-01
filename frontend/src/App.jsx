@@ -12,6 +12,7 @@ import OrganizerHome from "./pages/OrganizerHome";
 import Profile from "./pages/Profile";
 import Register from "./pages/Register";
 import ReportPage from "./pages/ReportPage";
+import TeamRegistration from "./pages/TeamRegistration";
 import YearInCode from "./pages/YearInCode";
 
 function Protected({ roles, children }) {
@@ -42,6 +43,7 @@ export default function App() {
         <Route index element={<Home />} />
         <Route path="hackathons" element={<Hackathons />} />
         <Route path="hackathons/:id" element={<HackathonDetail />} />
+        <Route path="hackathons/:id/register" element={<Protected roles={["participant"]}><TeamRegistration /></Protected>} />
         <Route path="profile" element={<Profile />} />
         <Route path="year-in-code" element={<Protected roles={["participant"]}><YearInCode /></Protected>} />
         <Route path="extension" element={<Protected roles={["participant"]}><ExtensionSetup /></Protected>} />
