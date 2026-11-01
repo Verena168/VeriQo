@@ -32,6 +32,9 @@ class Application(UUIDPrimaryKeyMixin, Base):
     # Per-requirement explanation from the matcher: [{"skill", "weight", "matched_by", "evidence", "score"}]
     match_details: Mapped[list | None] = mapped_column(JSONB)
     resume_filename: Mapped[str | None] = mapped_column(String(255))
+    # MongoDB GridFS file ids (24-char ObjectId hex) for uploaded documents; see app/mongo/files.py.
+    cv_file_id: Mapped[str | None] = mapped_column(String(24))
+    pitch_deck_file_id: Mapped[str | None] = mapped_column(String(24))
     review_note: Mapped[str | None] = mapped_column(String(500))  # e.g. why the resume was unreadable
     applied_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

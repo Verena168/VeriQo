@@ -1,7 +1,7 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Presentation } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { ApplicationBadge, Button, Card, Chip, Empty, ErrorBanner, Meter, Select, Spinner, Table, Td, Th } from "../../components/ui";
-import { api } from "../../lib/api";
+import { api, openFile } from "../../lib/api";
 import { fmtDateTime } from "../../lib/format";
 import { useApi } from "../../lib/useApi";
 import { MatchBreakdown } from "../HackathonDetail";
@@ -116,9 +116,21 @@ export default function Applicants({ hackathon, canEdit }) {
                   {isOpen && (
                     <tr>
                       <td colSpan={canEdit ? 7 : 6} className="border-b border-line bg-surface-2/40 px-5 py-4">
-                        <div className="mb-2 text-xs text-muted">
-                          Applied {fmtDateTime(a.applied_at)} · {a.resume_filename}
-                          {p.github && ` · GitHub: ${p.github.public_repos} repos, ${p.github.recently_active_repos} active in 6 months`}
+                        <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-muted">
+                          <span>
+                            Applied {fmtDateTime(a.applied_at)} · {a.resume_filename}
+                            {p.github && ` · GitHub: ${p.github.public_repos} repos, ${p.github.recently_active_repos} active in 6 months`}
+                          </span>
+                          {a.cv_file_id && (
+                            <Button size="sm" variant="secondary" onClick={() => openFile(`/applications/${a.id}/cv`).catch((e) => setActionError(e.message))}>
+                              <FileText className="size-3.5" aria-hidden /> View CV
+                            </Button>
+                          )}
+                          {a.pitch_deck_file_id && (
+                            <Button size="sm" variant="secondary" onClick={() => openFile(`/applications/${a.id}/pitch-deck`).catch((e) => setActionError(e.message))}>
+                              <Presentation className="size-3.5" aria-hidden /> View pitch deck
+                            </Button>
+                          )}
                         </div>
                         {a.review_note && <p className="mb-2 text-sm text-warn">{a.review_note}</p>}
                         <MatchBreakdown breakdown={a.match_details} />

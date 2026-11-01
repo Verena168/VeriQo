@@ -35,6 +35,22 @@ function describe(detail) {
   return detail.message || JSON.stringify(detail);
 }
 
+/** Open an access-controlled file (CV, pitch deck) in a new tab. A plain link can't carry the
+ *  login token, so fetch it as a blob and open a temporary object URL instead. */
+export async function openFile(path) {
+  const tab = window.open("", "_blank"); // open synchronously so the popup blocker allows it
+  const res = await fetch(BASE + path, { headers: { Authorization: `Bearer ${getToken()}` } });
+  if (!res.ok) {
+    tab?.close();
+    const data = await res.json().catch(() => null);
+    throw new ApiError(describe(data?.detail) || `Could not open file (${res.status})`, res.status);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  if (tab) tab.location.href = url;
+  else window.location.href = url;
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 export async function api(path, { method = "GET", body, form } = {}) {
   const headers = {};
   const token = getToken();

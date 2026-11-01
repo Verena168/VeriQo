@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -13,6 +14,7 @@ from app.core.config import get_settings
 from app.db.session import engine
 from app.mongo import code_store, telemetry
 from app.mongo.client import close_client, get_mongo_db
+from app.services import email
 from app.services.intelligence_client import IntelligenceError
 
 log = logging.getLogger("uvicorn.error")
@@ -26,7 +28,11 @@ async def lifespan(app: FastAPI):
         await code_store.ensure_indexes(get_mongo_db())
     except PyMongoError as exc:
         log.warning("MongoDB unreachable, telemetry indexes not created: %s", type(exc).__name__)
+    stop = asyncio.Event()
+    sender = asyncio.create_task(email.run_sender(stop), name="email-sender")
     yield
+    stop.set()
+    await sender
     await close_client()
     await engine.dispose()
 

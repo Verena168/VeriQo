@@ -148,6 +148,8 @@ class ApplicationOut(ORM):
     score: float | None
     match_details: list | None
     resume_filename: str | None
+    cv_file_id: str | None = None
+    pitch_deck_file_id: str | None = None
     review_note: str | None
     applied_at: datetime
 

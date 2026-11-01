@@ -4,14 +4,18 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DB, Organizer, Participant, Staff
+from app.api.deps import DB, CurrentUser, Organizer, Participant, Staff
 from app.api.v1.endpoints.hackathons import get_hackathon, get_owned_hackathon, phase, to_out
 from app.models import Application, TeamMember
 from app.models.application import ApplicationStatus
+from app.models.user import UserRole
+from app.mongo import files
 from app.schemas import GITHUB_PROFILE_RE, ApplicationOut, ApplicationUpdate, ApplicationWithHackathon, ApplicationWithUser
+from app.services import email
 from app.services import intelligence_client as intel
 from app.services.intelligence_client import IntelligenceError
 
@@ -54,6 +58,10 @@ async def apply(
     data = await resume.read(MAX_RESUME_BYTES + 1)
     if len(data) > MAX_RESUME_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Resume must be 5 MB or smaller")
+    try:
+        files.validate(files.CV, resume.filename or "", data)  # by content, before any AI work
+    except files.FileRejected as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
 
     review_note, parsed = None, None
     try:
@@ -101,13 +109,87 @@ async def apply(
     if app is None:
         app = Application(hackathon_id=hk.id, user_id=user.id)
         db.add(app)
+    stored = await files.save(files.CV, resume.filename or "resume", data,
+                              {"user_id": str(user.id), "hackathon_id": str(hk.id), "purpose": "application_cv"})
+    replaced_file_id = app.cv_file_id
     app.status, app.score, app.match_details = new_status, score, breakdown
-    app.resume_filename = (resume.filename or "resume")[:255]
+    app.resume_filename = stored.filename[:255]
+    app.cv_file_id = stored.file_id
     app.review_note = review_note[:500] if review_note else None
     app.applied_at = datetime.now(timezone.utc)
-    await db.commit()
+    email.enqueue(db, user.email, "application_received", {"name": user.name, "hackathon": hk.event_name}, to_user_id=user.id)
+    try:
+        await db.commit()
+    except Exception:
+        await files.delete(stored.file_id)  # don't leave an orphaned upload behind
+        raise
+    await files.delete(replaced_file_id)  # previous CV, only once the new one is safely recorded
     await db.refresh(app)
     return _with_hackathon(app, hk)
+
+
+async def _application_for_file(db, application_id: uuid.UUID, user) -> Application:
+    """The applicant themselves, or staff of the hackathon, may access an application's files."""
+    app = await db.get(Application, application_id)
+    if app is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Application not found")
+    if user.role == UserRole.PARTICIPANT:
+        if app.user_id != user.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Application not found")
+    else:
+        await get_owned_hackathon(db, app.hackathon_id, user)
+    return app
+
+
+async def _stream(file_id: str | None, what: str) -> StreamingResponse:
+    if not file_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No {what} uploaded")
+    try:
+        info, chunks = await files.open_stream(file_id)
+    except FileNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{what.capitalize()} file is missing")
+    safe = "".join(c for c in info["filename"] if c.isalnum() or c in "._- ")[:100] or "file"
+    return StreamingResponse(chunks, media_type=info["content_type"], headers={
+        "Content-Disposition": f'inline; filename="{safe}"',
+        "Content-Length": str(info["size"]),
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store",
+    })
+
+
+@router.get("/applications/{application_id}/cv")
+async def download_cv(application_id: uuid.UUID, db: DB, user: CurrentUser):
+    app = await _application_for_file(db, application_id, user)
+    return await _stream(app.cv_file_id, "CV")
+
+
+@router.put("/applications/{application_id}/pitch-deck", response_model=ApplicationOut)
+async def upload_pitch_deck(application_id: uuid.UUID, db: DB, user: Participant, deck: UploadFile = File(...)):
+    app = await _application_for_file(db, application_id, user)
+    hk = await get_hackathon(db, app.hackathon_id)
+    if phase(hk) == "ended":
+        raise HTTPException(status.HTTP_409_CONFLICT, "This hackathon has ended")
+    data = await deck.read(files.PITCH_DECK.max_bytes + 1)
+    try:
+        stored = await files.save(files.PITCH_DECK, deck.filename or "pitch", data,
+                                  {"user_id": str(user.id), "hackathon_id": str(app.hackathon_id), "purpose": "pitch_deck"})
+    except files.FileRejected as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+    replaced_file_id, app.pitch_deck_file_id = app.pitch_deck_file_id, stored.file_id
+    try:
+        await db.commit()
+    except Exception:
+        await files.delete(stored.file_id)
+        raise
+    await files.delete(replaced_file_id)
+    await db.refresh(app)
+    return app
+
+
+@router.get("/applications/{application_id}/pitch-deck")
+async def download_pitch_deck(application_id: uuid.UUID, db: DB, user: CurrentUser):
+    app = await _application_for_file(db, application_id, user)
+    return await _stream(app.pitch_deck_file_id, "pitch deck")
 
 
 @router.get("/applications/mine", response_model=list[ApplicationWithHackathon])
