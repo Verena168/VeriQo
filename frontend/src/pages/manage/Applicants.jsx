@@ -136,7 +136,8 @@ export default function Applicants({ hackathon, canEdit }) {
           <tbody>
             {rows.map((a) => {
               const isOpen = open === a.id;
-              const pooled = [...new Set(a.members.flatMap((m) => m.skills))];
+              // `skills` can be missing from an older API; filter() also drops empty values so every chip has a key.
+              const pooled = [...new Set(a.members.flatMap((m) => m.skills || []))].filter(Boolean);
               return (
                 <Fragment key={a.id}>
                   <tr className="hover:bg-surface-2/50">
@@ -226,7 +227,7 @@ export default function Applicants({ hackathon, canEdit }) {
                               </div>
                               {m.artifact?.parse_status === "unreadable" && <p className="mt-1 text-xs text-warn">CV text couldn't be read; review it manually.</p>}
                               <div className="mt-2 flex flex-wrap gap-1">
-                                {m.skills.slice(0, 10).map((s) => (
+                                {(m.skills || []).slice(0, 10).map((s) => (
                                   <Chip key={s}>{s}</Chip>
                                 ))}
                               </div>
