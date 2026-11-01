@@ -9,6 +9,7 @@ import Hackathons from "./pages/Hackathons";
 import Login from "./pages/Login";
 import ManageHackathon from "./pages/ManageHackathon";
 import OrganizerHome from "./pages/OrganizerHome";
+import Profile from "./pages/Profile";
 import Register from "./pages/Register";
 import ReportPage from "./pages/ReportPage";
 import YearInCode from "./pages/YearInCode";
@@ -41,6 +42,7 @@ export default function App() {
         <Route index element={<Home />} />
         <Route path="hackathons" element={<Hackathons />} />
         <Route path="hackathons/:id" element={<HackathonDetail />} />
+        <Route path="profile" element={<Profile />} />
         <Route path="year-in-code" element={<Protected roles={["participant"]}><YearInCode /></Protected>} />
         <Route path="extension" element={<Protected roles={["participant"]}><ExtensionSetup /></Protected>} />
         <Route path="organizer" element={<Protected roles={["organizer"]}><OrganizerHome /></Protected>} />

@@ -1,6 +1,7 @@
 import enum
+from datetime import date
 
-from sqlalchemy import String
+from sqlalchemy import Boolean, Date, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -25,6 +26,10 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     # Output of the NLP service: {"skills": [...], "experience_level": "...", ...}
     parsed_skills: Mapped[dict | None] = mapped_column(JSONB)
+    # Eligibility profile. Date of birth, not age: age depends on the event date.
+    date_of_birth: Mapped[date | None] = mapped_column(Date)
+    is_student: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # self-declared
+    institution: Mapped[str | None] = mapped_column(String(200))
 
     applications = relationship("Application", back_populates="user")
     team_memberships = relationship("TeamMember", back_populates="user")

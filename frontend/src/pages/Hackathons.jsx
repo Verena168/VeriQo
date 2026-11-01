@@ -30,7 +30,12 @@ export function HackathonCard({ h, href, cta }) {
         {fmtDate(h.start_date)} – {fmtDate(h.end_date)}
       </div>
       {h.description && <p className="mt-3 line-clamp-2 text-sm text-ink-2">{h.description}</p>}
-      <div className="mt-4 flex flex-wrap gap-1.5">
+      <div className="mt-3 flex flex-wrap gap-1.5 text-xs">
+        <Chip tone="accent">{h.participation_mode === "solo" ? "Solo" : `Teams up to ${h.max_team_size}`}</Chip>
+        {h.student_only && <Chip tone="accent">Students only</Chip>}
+        <Chip tone="accent">{Number(h.fee_amount) > 0 ? `₹${Number(h.fee_amount).toLocaleString()} fee` : "Free"}</Chip>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-1.5">
         {h.requirements.slice(0, 6).map((r) => (
           <Chip key={r.id}>{r.skill}</Chip>
         ))}

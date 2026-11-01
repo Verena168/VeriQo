@@ -47,10 +47,10 @@ export default function Layout() {
           </nav>
           <div className="flex items-center gap-3">
             <ThemeToggle />
-            <div className="hidden text-right text-sm leading-tight md:block">
+            <NavLink to="/profile" title="Your profile" className="hidden rounded-lg px-2 py-1 text-right text-sm leading-tight hover:bg-surface-2 md:block">
               <div className="font-medium">{user.name}</div>
               <div className="text-xs capitalize text-muted">{user.role}</div>
-            </div>
+            </NavLink>
             <button
               onClick={() => {
                 logout();

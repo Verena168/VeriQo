@@ -10,10 +10,30 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import DB, CurrentUser, Organizer
 from app.models import Application, Hackathon, HackathonRequirement
 from app.models.user import UserRole
-from app.schemas import HackathonIn, HackathonOut, HackathonUpdate
+from app.schemas import (
+    HackathonIn,
+    HackathonOut,
+    HackathonUpdate,
+    ShortlistConfig,
+    event_rule_errors,
+)
 from app.services.visibility import published_shortlisted
 
 router = APIRouter(prefix="/hackathons", tags=["hackathons"])
+
+
+RULE_FIELDS = (
+    "start_date", "end_date", "registration_opens_at", "registration_closes_at",
+    "participation_mode", "min_team_size", "max_team_size", "age_min", "age_max",
+)
+JSON_FIELDS = {"prizes", "shortlist_config"}  # stored in JSONB columns: must be plain JSON (no Decimal)
+
+
+def _column_values(body, exclude_unset: bool) -> dict:
+    """Request body -> column values; JSONB fields are serialized to JSON-safe types."""
+    data = body.model_dump(exclude={"requirements"}, exclude_unset=exclude_unset)
+    as_json = body.model_dump(mode="json", include=JSON_FIELDS & set(data), exclude_unset=exclude_unset)
+    return data | as_json
 
 
 def phase(h: Hackathon) -> str:
@@ -24,6 +44,8 @@ def phase(h: Hackathon) -> str:
 def to_out(h: Hackathon) -> HackathonOut:
     out = HackathonOut.model_validate(h)
     out.phase = phase(h)
+    # Older events store {}: always return the full validated pipeline, defaults filled in.
+    out.shortlist_config = ShortlistConfig.model_validate(h.shortlist_config or {}).model_dump(mode="json")
     return out
 
 
@@ -64,7 +86,7 @@ async def my_hackathons(db: DB, user: CurrentUser):
 
 @router.post("", response_model=HackathonOut, status_code=status.HTTP_201_CREATED)
 async def create_hackathon(body: HackathonIn, db: DB, user: Organizer):
-    h = Hackathon(**body.model_dump(exclude={"requirements"}), organizer_id=user.id)
+    h = Hackathon(**_column_values(body, exclude_unset=False), organizer_id=user.id)
     h.requirements = [HackathonRequirement(**r.model_dump()) for r in body.requirements]
     db.add(h)
     await db.commit()
@@ -79,12 +101,22 @@ async def read_hackathon(hackathon_id: uuid.UUID, db: DB, user: CurrentUser):
 @router.patch("/{hackathon_id}", response_model=HackathonOut)
 async def update_hackathon(hackathon_id: uuid.UUID, body: HackathonUpdate, db: DB, user: Organizer):
     h = await get_owned_hackathon(db, hackathon_id, user)
-    data = body.model_dump(exclude_unset=True)
-    reqs = data.pop("requirements", None)
+    data = _column_values(body, exclude_unset=True)
+    reqs = body.model_dump(exclude_unset=True).get("requirements")
+
+    # Cross-field rules must hold for the merged result, not just the fields being changed.
+    merged = {field: getattr(h, field) for field in RULE_FIELDS} | {k: v for k, v in data.items() if k in RULE_FIELDS}
+    if errors := event_rule_errors(merged):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(errors))
+
+    # Rounds can't be switched on or off once people have applied (weights may still change).
+    if "shortlist_config" in data and await db.scalar(select(Application.id).where(Application.hackathon_id == h.id).limit(1)):
+        before = ShortlistConfig.model_validate(h.shortlist_config or {}).enabled_keys()
+        if body.shortlist_config.enabled_keys() != before:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Rounds can't be enabled or disabled after the first application")
+
     for field, value in data.items():
         setattr(h, field, value)
-    if h.end_date <= h.start_date:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "end_date must be after start_date")
     if reqs is not None:
         h.requirements = [HackathonRequirement(**r) for r in reqs]
     hackathon_id = h.id  # read before expiring: touching an expired attribute would trigger sync IO

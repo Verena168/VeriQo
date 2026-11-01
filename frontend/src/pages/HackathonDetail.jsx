@@ -55,6 +55,30 @@ export function MatchBreakdown({ breakdown }) {
   );
 }
 
+/** Mirrors services/eligibility.py so applicants see what to fix before uploading anything.
+ *  The server still enforces these rules; this is only for a clearer experience. */
+function eligibilityProblems(user, h) {
+  const problems = [];
+  const now = new Date();
+  if (h.registration_opens_at && now < new Date(h.registration_opens_at)) {
+    problems.push(`Registration opens ${fmtDateTime(h.registration_opens_at)}.`);
+  }
+  if (now > new Date(h.registration_closes_at || h.end_date)) problems.push("Registration has closed.");
+  if (h.age_min != null || h.age_max != null) {
+    if (!user.date_of_birth) {
+      problems.push("Add your date of birth: this hackathon has an age requirement.");
+    } else {
+      const [by, bm, bd] = user.date_of_birth.split("-").map(Number);
+      const s = new Date(h.start_date);
+      const age = s.getFullYear() - by - (s.getMonth() + 1 < bm || (s.getMonth() + 1 === bm && s.getDate() < bd) ? 1 : 0);
+      if (h.age_min != null && age < h.age_min) problems.push(`You must be at least ${h.age_min} when it starts (you will be ${age}).`);
+      if (h.age_max != null && age > h.age_max) problems.push(`You must be ${h.age_max} or younger when it starts (you will be ${age}).`);
+    }
+  }
+  if (h.student_only && !user.is_student) problems.push("This hackathon is for students only. Mark yourself as a student if you are one.");
+  return problems;
+}
+
 function ApplySection({ hackathon, application, onDone }) {
   const { user } = useAuth();
   const [file, setFile] = useState(null);
@@ -62,6 +86,7 @@ function ApplySection({ hackathon, application, onDone }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const ended = hackathon.phase === "ended";
+  const problems = eligibilityProblems(user, hackathon); // the server enforces the same rules
 
   const submit = async (e) => {
     e.preventDefault();
@@ -104,7 +129,20 @@ function ApplySection({ hackathon, application, onDone }) {
             )}
           </>
         )}
-        {!ended && (
+        {!ended && problems.length > 0 && (
+          <Notice icon={Info}>
+            <div className="font-medium">Before you can apply:</div>
+            <ul className="mt-1 list-disc pl-5">
+              {problems.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+            </ul>
+            <Link to="/profile" className="mt-2 inline-block font-medium text-accent hover:underline">
+              Update your profile
+            </Link>
+          </Notice>
+        )}
+        {!ended && problems.length === 0 && (
           <form onSubmit={submit} className="space-y-4 border-t border-line pt-5 first:border-0 first:pt-0">
             <ErrorBanner>{error}</ErrorBanner>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -326,8 +364,55 @@ export default function HackathonDetail() {
               </div>
             </div>
             {h.description && <p className="mt-4 whitespace-pre-line text-sm">{h.description}</p>}
-            <div className="mt-4 text-sm text-ink-2">Teams of up to {h.max_team_size}</div>
           </Card>
+          {h.problem_statement && (
+            <Card className="p-5">
+              <h3 className="mb-2 text-sm font-semibold">Problem statement</h3>
+              <p className="whitespace-pre-line text-sm">{h.problem_statement}</p>
+            </Card>
+          )}
+          <Card>
+            <CardHeader title="Rules" />
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 px-5 py-4 text-sm">
+              <dt className="text-ink-2">Format</dt>
+              <dd>{h.participation_mode === "solo" ? "Solo" : `Teams of ${h.min_team_size === h.max_team_size ? h.max_team_size : `${h.min_team_size}–${h.max_team_size}`}`}</dd>
+              <dt className="text-ink-2">Registration</dt>
+              <dd>
+                {h.registration_opens_at ? `${fmtDateTime(h.registration_opens_at)} – ` : "Open until "}
+                {fmtDateTime(h.registration_closes_at || h.end_date)}
+              </dd>
+              {(h.age_min || h.age_max) && (
+                <>
+                  <dt className="text-ink-2">Age</dt>
+                  <dd>{h.age_min && h.age_max ? `${h.age_min}–${h.age_max}` : h.age_min ? `${h.age_min}+` : `Up to ${h.age_max}`} at the start date</dd>
+                </>
+              )}
+              {h.student_only && (
+                <>
+                  <dt className="text-ink-2">Who</dt>
+                  <dd>Students only</dd>
+                </>
+              )}
+              <dt className="text-ink-2">Fee</dt>
+              <dd>{Number(h.fee_amount) > 0 ? `₹${Number(h.fee_amount).toLocaleString()}` : "Free"}</dd>
+            </dl>
+          </Card>
+          {h.prizes?.length > 0 && (
+            <Card>
+              <CardHeader title="Prizes" />
+              <ul className="divide-y divide-line">
+                {h.prizes.map((p, i) => (
+                  <li key={i} className="px-5 py-2.5 text-sm">
+                    <div className="flex justify-between gap-3">
+                      <span className="font-medium">{p.title}</span>
+                      {p.amount != null && <span className="tabular">₹{Number(p.amount).toLocaleString()}</span>}
+                    </div>
+                    {p.note && <div className="text-xs text-ink-2">{p.note}</div>}
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
           <Card>
             <CardHeader title="Required skills" />
             <ul className="divide-y divide-line">

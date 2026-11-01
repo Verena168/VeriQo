@@ -29,6 +29,7 @@ from app.schemas import (
 )
 from app.services import email
 from app.services import intelligence_client as intel
+from app.services.eligibility import person_violations, registration_problem
 from app.services.intelligence_client import IntelligenceError
 from app.services.visibility import participant_view
 
@@ -63,6 +64,10 @@ async def apply(
     hk = await get_hackathon(db, hackathon_id)
     if phase(hk) == "ended":
         raise HTTPException(status.HTTP_409_CONFLICT, "This hackathon has ended")
+    if closed := registration_problem(hk):
+        raise HTTPException(status.HTTP_409_CONFLICT, closed)
+    if problems := person_violations(user, hk):  # hard gate, before any upload or AI work
+        raise HTTPException(status.HTTP_403_FORBIDDEN, " ".join(problems))
     if await db.scalar(select(TeamMember.team_id).where(TeamMember.hackathon_id == hk.id, TeamMember.user_id == user.id)):
         raise HTTPException(status.HTTP_409_CONFLICT, "You are already in a team for this hackathon")
     github_url = (github_url or "").strip() or user.github_url
